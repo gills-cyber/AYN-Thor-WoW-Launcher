@@ -182,6 +182,8 @@ public class XServer {
     }
 
     public void injectPointerMove(int x, int y) {
+        // A suspended game cannot use pointer motion; dropping it keeps output from piling up.
+        if (com.winlator.core.ProcessHelper.isPauseActive()) return;
         try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
             pointer.setPosition(x, y);
         }
@@ -189,6 +191,7 @@ public class XServer {
 
     public void injectPointerMoveDelta(int dx, int dy) {
         if (dx == 0 && dy == 0) return;
+        if (com.winlator.core.ProcessHelper.isPauseActive()) return;
 
         WinHandler handler = winHandler;
         if (relativeMouseMovement && handler != null) {

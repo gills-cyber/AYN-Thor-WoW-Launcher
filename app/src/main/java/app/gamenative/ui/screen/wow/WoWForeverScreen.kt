@@ -1234,7 +1234,56 @@ private data class GpuProfile(val driver: String, val tuDebug: String, val scree
     }
 }
 
+/** Free space below which the launcher refuses to start the game. */
+private const val MIN_FREE_APP_STORAGE_BYTES = 300L * 1024 * 1024
+private const val MIN_FREE_GAME_STORAGE_BYTES = 100L * 1024 * 1024
+
+/**
+ * Wine rewrites its registry and WoW rewrites its settings and caches while the game runs. With the
+ * storage full those writes are cut short, which leaves a prefix that no longer starts and makes
+ * every app on the device misbehave. Stop here with a clear message instead.
+ */
+private fun checkFreeStorage(context: Context, gameRoot: File) {
+    fun freeBytes(dir: File): Long? = runCatching { android.os.StatFs(dir.path).availableBytes }.getOrNull()
+    fun mb(bytes: Long) = bytes / (1024 * 1024)
+    freeBytes(context.filesDir)?.let { free ->
+        check(free >= MIN_FREE_APP_STORAGE_BYTES) {
+            "Only ${mb(free)} MB free on internal storage. Free up at least ${mb(MIN_FREE_APP_STORAGE_BYTES)} MB, then press Play again."
+        }
+    }
+    freeBytes(gameRoot)?.let { free ->
+        check(free >= MIN_FREE_GAME_STORAGE_BYTES) {
+            "Only ${mb(free)} MB free where the game files are. Free up at least ${mb(MIN_FREE_GAME_STORAGE_BYTES)} MB, then press Play again."
+        }
+    }
+}
+
+private const val FPS_CAP_PREFS = "wow_forever"
+
+/**
+ * Once per game: caps the frame rate at 60 (30 in the background) if Config.wtf does not set one.
+ * Uncapped, the game renders as fast as the chip allows, which heats the device until it throttles
+ * and stutters after long sessions. Done once only, so a cap changed or removed in game stays that way.
+ */
+private fun applyDefaultFpsCapOnce(context: Context, root: File) {
+    val prefs = context.getSharedPreferences(FPS_CAP_PREFS, Context.MODE_PRIVATE)
+    val key = "fps_cap_applied_${WowFlavor.current.name}"
+    if (prefs.getBoolean(key, false)) return
+    val configWtf = File(File(root, FLAVOR_DIR), "WTF/Config.wtf")
+    if (!configWtf.isFile) return
+    val lines = configWtf.readLines()
+    fun has(name: String) = lines.any { it.startsWith("SET $name ", ignoreCase = true) }
+    if (!has("maxFPS") && !has("useMaxFPS") && !has("targetFPS") && !has("useTargetFPS")) {
+        val added = listOf("SET useMaxFPS \"1\"", "SET maxFPS \"60\"") +
+            (if (!has("maxFPSBk") && !has("useMaxFPSBk")) listOf("SET useMaxFPSBk \"1\"", "SET maxFPSBk \"30\"") else emptyList())
+        configWtf.writeText((lines + added).joinToString("\n") + "\n")
+    }
+    prefs.edit().putBoolean(key, true).apply()
+}
+
 private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onStatus: (String) -> Unit): String {
+    checkFreeStorage(context, gameRoot)
+    AppUpdater.cleanupDownloads(context)
     installBundledComponents(context, onStatus)
 
     check(File(gameRoot, BUILD_INFO).exists()) { "Missing $BUILD_INFO in $gameRoot. Copy it from your WoW install." }
@@ -1243,6 +1292,7 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onS
         PadSettings.launchProfile(WowFlavor.current.name).takeIf { it > 0 }?.let { PadSettings.loadProfile(it) }
         PadSettings.set(PadSettings.R3_TOGGLE, ButtonPad.r3Toggle(context, WowFlavor.current))
         ensureGameConfig(gameRoot, if (ButtonPad.forceGamepadUi(context, WowFlavor.current)) 0 else 1)
+        applyDefaultFpsCapOnce(context, gameRoot)
     } catch (e: Exception) {
         if (e.isPermissionDenied()) throw StorageAccessDeniedException(e)
         throw e
@@ -1310,6 +1360,9 @@ private fun containerConfig(gameRoot: File, gpu: GpuProfile, exeName: String, sc
         put("showFPS", true)
         put("startupSelection", Container.STARTUP_SELECTION_AGGRESSIVE.toInt())
         put("wow64Mode", true)
+        // Resume by itself when the app comes back or the menu closes. The default ("manual") leaves the
+        // game frozen behind an unlabeled button every time the app loses the screen for a moment.
+        put("suspendPolicy", Container.SUSPEND_POLICY_AUTO)
         put("wincomponents", "direct3d=0,directsound=0,directinput8=0,directinput=0,directmusic=0,directshow=0,directplay=0,vcrun2010=0,wmdecoder=0,opengl=0")
     }
 }

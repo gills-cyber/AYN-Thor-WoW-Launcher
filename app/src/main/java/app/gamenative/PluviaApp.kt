@@ -99,6 +99,9 @@ class PluviaApp : Application() {
                 .onFailure { Timber.e(it, "shutdownEnvironment: radialMenuCoordinator.detach") }
             runCatching { env?.stopEnvironmentComponents() }
                 .onFailure { Timber.e(it, "shutdownEnvironment: stopEnvironmentComponents") }
+            // the game may have been closed while suspended; do not carry that into the next session
+            runCatching { com.winlator.core.ProcessHelper.clearPauseState() }
+                .onFailure { Timber.e(it, "shutdownEnvironment: clearPauseState") }
 
 
             xEnvironment = null

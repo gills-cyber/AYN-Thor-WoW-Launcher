@@ -102,7 +102,56 @@ public class XOutputStream {
         write(ZERO, 0, length);
     }
 
+    /** Streams holding output for clients that are stopped (game suspended). */
+    private static final java.util.Set<XOutputStream> deferredStreams =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Client sockets are blocking. A suspended (SIGSTOP) client never reads, so once its socket
+     * buffer fills, write() would block forever, on whichever thread is sending, with the X server
+     * locks held. Input is injected from the UI thread, so that freezes the whole app, including the
+     * Resume button. While the game is suspended the output is kept here instead and written out
+     * when the game resumes. Messages that carry a file descriptor are never held back.
+     */
     private void flush() throws IOException {
+        if (buffer.position() != 0 && ancillaryFd == -1 && clientSocket != null
+                && com.winlator.core.ProcessHelper.isPauseActive()) {
+            deferredStreams.add(this);
+            // Close the window where the game resumed between the check and the add.
+            if (com.winlator.core.ProcessHelper.isPauseActive()) return;
+            deferredStreams.remove(this);
+        }
+        flushNow();
+    }
+
+    /** Writes out everything held back while the game was suspended. Runs off the calling thread. */
+    public static void flushDeferredAsync() {
+        if (deferredStreams.isEmpty()) return;
+        Thread thread = new Thread(() -> {
+            // Two passes: the second catches a stream that deferred while the first was running.
+            for (int pass = 0; pass < 2; pass++) {
+                for (XOutputStream stream : deferredStreams.toArray(new XOutputStream[0])) {
+                    if (com.winlator.core.ProcessHelper.isPauseActive()) return;
+                    deferredStreams.remove(stream);
+                    stream.lock.lock();
+                    try {
+                        stream.flushNow();
+                    }
+                    catch (IOException | RuntimeException ignored) {
+                        // The client is gone; its connection is torn down by the reader side.
+                    }
+                    finally {
+                        stream.lock.unlock();
+                    }
+                }
+                try { Thread.sleep(150); } catch (InterruptedException e) { return; }
+            }
+        }, "XDeferredFlush");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void flushNow() throws IOException {
         if (buffer.position() != 0) {
             buffer.flip();
 
@@ -123,7 +172,10 @@ public class XOutputStream {
     private void ensureSpaceIsAvailable(int length) {
         int position = buffer.position();
         if ((buffer.capacity() - position) >= length) return;
-        ByteBuffer newBuffer = ByteBuffer.allocateDirect(buffer.capacity() + length).order(buffer.order());
+        // Grow geometrically: growing by exactly what is missing copies the whole buffer on every write
+        // once it is full, which gets slow when output piles up.
+        int newCapacity = Math.max(position + length, buffer.capacity() + (buffer.capacity() >> 1));
+        ByteBuffer newBuffer = ByteBuffer.allocateDirect(newCapacity).order(buffer.order());
         buffer.rewind();
         newBuffer.put(buffer).position(position);
         buffer = newBuffer;

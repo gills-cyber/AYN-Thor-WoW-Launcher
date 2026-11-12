@@ -3612,6 +3612,8 @@ private fun setupXEnvironment(
     }
 
     ProcessHelper.removeAllDebugCallbacks()
+    // A previous session that ended while suspended must not leave this one marked as paused.
+    ProcessHelper.clearPauseState()
     // read user preferences
     val enableWineDebug = PrefManager.enableWineDebug
     val enableBox86Logs = WinlatorPrefManager.getBoolean("enable_box86_64_logs", false)
