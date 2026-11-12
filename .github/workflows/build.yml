@@ -40,7 +40,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wow-${{ github.ref_name }}-${{ github.sha }}
+          # Branch names can contain "/", which artifact names may not.
+          name: WoWLauncher-${{ github.sha }}
           path: app/build/outputs/apk/modern/debug/*.apk
           # Private-repo artifacts count against the account's Actions storage; keep them one day.
           retention-days: ${{ github.event.repository.private && 1 || 14 }}
