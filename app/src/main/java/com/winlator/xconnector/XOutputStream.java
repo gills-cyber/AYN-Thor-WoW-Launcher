@@ -124,6 +124,23 @@ public class XOutputStream {
         flushNow();
     }
 
+    /** Set once the client's socket is closed (or about to be): nothing may be written after that. */
+    private volatile boolean closed = false;
+
+    /**
+     * Called when the client's connection is torn down, before its socket is closed. Held-back output
+     * must never be written afterwards: the descriptor number may already belong to another file.
+     */
+    public void discardDeferred() {
+        closed = true;
+        deferredStreams.remove(this);
+    }
+
+    /** Drops everything held back for every client. For teardown, where there is nobody left to read it. */
+    public static void discardAllDeferred() {
+        for (XOutputStream stream : deferredStreams.toArray(new XOutputStream[0])) stream.discardDeferred();
+    }
+
     /** Writes out everything held back while the game was suspended. Runs off the calling thread. */
     public static void flushDeferredAsync() {
         if (deferredStreams.isEmpty()) return;
@@ -152,6 +169,11 @@ public class XOutputStream {
     }
 
     private void flushNow() throws IOException {
+        if (closed) {
+            buffer.clear();
+            ancillaryFd = -1;
+            return;
+        }
         if (buffer.position() != 0) {
             buffer.flip();
 

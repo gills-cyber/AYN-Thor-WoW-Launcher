@@ -287,6 +287,8 @@ class ExternalActionBarView(
                     MotionEvent.ACTION_DOWN -> {
                         view.isPressed = true
                         PadSettings.haptic(view)
+                        // A release that never arrived must not leave the old key down.
+                        pressedKey?.let { releaseKey(it) }
                         val combo = comboFor(slot)
                         pressedKey = combo.key
                         pressKey(combo, isolated = slot.isolated, mergeModifiers = mergesModifiers(slot))

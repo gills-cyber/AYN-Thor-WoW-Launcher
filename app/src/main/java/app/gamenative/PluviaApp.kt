@@ -97,6 +97,9 @@ class PluviaApp : Application() {
                 .onFailure { Timber.e(it, "shutdownEnvironment: releasePointerCapture") }
             runCatching { radialMenuCoordinator?.detach() }
                 .onFailure { Timber.e(it, "shutdownEnvironment: radialMenuCoordinator.detach") }
+            // nobody is left to read output held back for a suspended game
+            runCatching { com.winlator.xconnector.XOutputStream.discardAllDeferred() }
+                .onFailure { Timber.e(it, "shutdownEnvironment: discardAllDeferred") }
             runCatching { env?.stopEnvironmentComponents() }
                 .onFailure { Timber.e(it, "shutdownEnvironment: stopEnvironmentComponents") }
             // the game may have been closed while suspended; do not carry that into the next session
