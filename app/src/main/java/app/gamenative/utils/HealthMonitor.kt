@@ -33,6 +33,9 @@ object HealthMonitor {
     private const val STORAGE_WARN_EVERY_MS = 10 * 60_000L
     private const val LOW_STORAGE_BYTES = 200L * 1024 * 1024
     private const val REPORTS_KEPT = 5
+    private const val MEMORY_LOG_MS = 5 * 60_000L
+    private const val MEMORY_WARN_EVERY_MS = 10 * 60_000L
+    private const val MEMORY_LOG_MAX_BYTES = 256L * 1024
 
     private val started = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -60,6 +63,8 @@ object HealthMonitor {
         var lastTick = SystemClock.uptimeMillis()
         var lastStorageCheck = 0L
         var lastStorageWarning = 0L
+        var lastMemoryLog = 0L
+        var lastMemoryWarning = 0L
         while (true) {
             try {
                 Thread.sleep(TICK_MS)
@@ -97,12 +102,53 @@ object HealthMonitor {
                         SnackbarManager.showTop("Storage almost full: ${free / (1024 * 1024)} MB free. Free up space soon.")
                     }
                 }
+
+                if (PluviaApp.keepAlive && now - lastMemoryLog > MEMORY_LOG_MS) {
+                    lastMemoryLog = now
+                    val memory = memoryInfo(app)
+                    logMemory(app, memory)
+                    if (memory.lowMemory &&
+                        (lastMemoryWarning == 0L || now - lastMemoryWarning > MEMORY_WARN_EVERY_MS)
+                    ) {
+                        lastMemoryWarning = now
+                        SnackbarManager.showTop("The device is low on memory. Save and restart the game soon.")
+                    }
+                }
             }.onFailure { Timber.w(it, "HealthMonitor tick failed") }
         }
     }
 
     /** Free bytes on the volume holding [dir], or -1 when it cannot be read. */
     fun freeBytes(dir: File): Long = runCatching { StatFs(dir.path).availableBytes }.getOrDefault(-1L)
+
+    private fun memoryInfo(app: Context): ActivityManager.MemoryInfo {
+        val memory = ActivityManager.MemoryInfo()
+        (app.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.getMemoryInfo(memory)
+        return memory
+    }
+
+    /**
+     * Appends one line every few minutes of play to `freeze_logs/memory.log`: free device memory and
+     * the memory used by this app's own processes (the game included). A figure that keeps climbing
+     * over a session points to a leak; a flat one rules memory out.
+     */
+    private fun logMemory(app: Context, memory: ActivityManager.MemoryInfo) {
+        val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "freeze_logs")
+        if (!dir.isDirectory && !dir.mkdirs()) return
+        val log = File(dir, "memory.log")
+        if (log.length() > MEMORY_LOG_MAX_BYTES) {
+            val old = File(dir, "memory.old.log")
+            old.delete()
+            log.renameTo(old)
+        }
+        val gameMb = ProcessHelper.listSubProcesses().sumOf { it.rssBytes } / (1024 * 1024)
+        val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+        log.appendText(
+            "$stamp device free ${memory.availMem / (1024 * 1024)} MB of ${memory.totalMem / (1024 * 1024)} MB" +
+                ", low=${memory.lowMemory}, game processes $gameMb MB" +
+                ", storage free ${freeBytes(app.filesDir) / (1024 * 1024)} MB\n",
+        )
+    }
 
     private fun writeFreezeReport(app: Context, stalledMs: Long) {
         val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "freeze_logs")
@@ -139,6 +185,7 @@ object HealthMonitor {
         File(dir, "freeze_$stamp.txt").writeText(report)
         Timber.w("UI thread not responding for %d ms; report written to %s", stalledMs, dir.path)
 
-        dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(REPORTS_KEPT)?.forEach { it.delete() }
+        dir.listFiles { file -> file.name.startsWith("freeze_") }
+            ?.sortedByDescending { it.lastModified() }?.drop(REPORTS_KEPT)?.forEach { it.delete() }
     }
 }

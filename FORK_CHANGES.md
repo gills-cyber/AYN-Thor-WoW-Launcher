@@ -55,3 +55,6 @@ release; they come from reading the source.
 - **Low storage warning during play** (under 200 MB free), and the launcher shows free storage.
 - **The game is stopped 1.5 seconds after the app loses the screen**, not at once, so brief
   interruptions no longer stop and restart it.
+- **Memory log.** Every five minutes of play a line with free device memory, the game's memory use
+  and free storage is added to `freeze_logs/memory.log`, and a warning appears when Android reports
+  the device low on memory.
