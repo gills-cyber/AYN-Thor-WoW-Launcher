@@ -52,6 +52,16 @@ public class ClientSocket {
         else throw new IOException("Failed to write data.");
     }
 
+    /**
+     * Writes as much of the first [length] bytes of [data] as the socket takes right now, without
+     * ever waiting for the client. Returns how many bytes went out (possibly 0).
+     */
+    public int writeNonBlocking(ByteBuffer data, int length) throws IOException {
+        int bytesWritten = writeNonBlocking(fd, data, length);
+        if (bytesWritten < 0) throw new IOException("Failed to write data.");
+        return bytesWritten;
+    }
+
     public int recvAncillaryMsg(ByteBuffer data) throws IOException {
         int position = data.position();
         int bytesRead = recvAncillaryMsg(fd, data, position, data.remaining());
@@ -76,6 +86,8 @@ public class ClientSocket {
     private native int read(int fd, ByteBuffer data, int offset, int length);
 
     private native int write(int fd, ByteBuffer data, int length);
+
+    private native int writeNonBlocking(int fd, ByteBuffer data, int length);
 
     private native int recvAncillaryMsg(int clientFd, ByteBuffer data, int offset, int length);
 

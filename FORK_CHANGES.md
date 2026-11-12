@@ -33,3 +33,14 @@ release; they come from reading the source.
 ## Other
 
 - The in-app updater checks this fork's releases, so an upstream release does not replace these fixes.
+
+## Added after review (2.7.0.1)
+
+- **The X server never blocks on a client that is not reading**, suspended or not. Output that does
+  not fit in the client's socket is kept in order and sent by a background thread. This covers the
+  game being busy (loading screens, long hitches) while input keeps arriving, which previously could
+  hang the UI thread. Pointer motion is dropped while a client is far behind.
+- Held-back output is discarded when a client disconnects, so it can never be written to a reused
+  file descriptor.
+- Key auto-repeat pauses while the game is suspended.
+- The second-screen pad is rebuilt if Android dismisses it after a display change.

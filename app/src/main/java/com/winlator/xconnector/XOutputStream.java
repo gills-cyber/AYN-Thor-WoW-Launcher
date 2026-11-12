@@ -102,30 +102,43 @@ public class XOutputStream {
         write(ZERO, 0, length);
     }
 
-    /** Streams holding output for clients that are stopped (game suspended). */
+    /** Streams with output that could not be written yet: the client is suspended or not reading. */
     private static final java.util.Set<XOutputStream> deferredStreams =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.atomic.AtomicBoolean flusherRunning =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    /** A stream is holding this much unsent output or more: pointer motion is dropped meanwhile. */
+    private static final int HIGH_BACKLOG_BYTES = 64 * 1024;
+    private static volatile boolean backlogHigh = false;
+
+    /** Set once the client's socket is closed (or about to be): nothing may be written after that. */
+    private volatile boolean closed = false;
+
+    /** True while some client is far behind on reading; callers drop droppable input (pointer motion). */
+    public static boolean isBacklogHigh() {
+        return backlogHigh;
+    }
 
     /**
-     * Client sockets are blocking. A suspended (SIGSTOP) client never reads, so once its socket
-     * buffer fills, write() would block forever, on whichever thread is sending, with the X server
-     * locks held. Input is injected from the UI thread, so that freezes the whole app, including the
-     * Resume button. While the game is suspended the output is kept here instead and written out
-     * when the game resumes. Messages that carry a file descriptor are never held back.
+     * A client that is suspended (SIGSTOP) or busy never reads its socket. A blocking write to it
+     * would hang forever once the socket buffer fills, on whichever thread is sending and with the
+     * X server locks held. Input is injected from the UI thread, so that froze the whole app,
+     * including the Resume button. So output is never written with a blocking call: what does not
+     * fit stays in this buffer, in order, and a background thread sends it when the client reads
+     * again. While the game is suspended nothing is sent at all.
      */
     private void flush() throws IOException {
         if (buffer.position() != 0 && ancillaryFd == -1 && clientSocket != null
                 && com.winlator.core.ProcessHelper.isPauseActive()) {
             deferredStreams.add(this);
             // Close the window where the game resumed between the check and the add.
-            if (com.winlator.core.ProcessHelper.isPauseActive()) return;
-            deferredStreams.remove(this);
+            if (com.winlator.core.ProcessHelper.isPauseActive()) {
+                ensureFlusher();
+                return;
+            }
         }
         flushNow();
     }
-
-    /** Set once the client's socket is closed (or about to be): nothing may be written after that. */
-    private volatile boolean closed = false;
 
     /**
      * Called when the client's connection is torn down, before its socket is closed. Held-back output
@@ -139,52 +152,107 @@ public class XOutputStream {
     /** Drops everything held back for every client. For teardown, where there is nobody left to read it. */
     public static void discardAllDeferred() {
         for (XOutputStream stream : deferredStreams.toArray(new XOutputStream[0])) stream.discardDeferred();
+        backlogHigh = false;
     }
 
-    /** Writes out everything held back while the game was suspended. Runs off the calling thread. */
+    /** Makes sure held-back output gets sent (after a resume, for example). Never blocks the caller. */
     public static void flushDeferredAsync() {
-        if (deferredStreams.isEmpty()) return;
-        Thread thread = new Thread(() -> {
-            // Two passes: the second catches a stream that deferred while the first was running.
-            for (int pass = 0; pass < 2; pass++) {
-                for (XOutputStream stream : deferredStreams.toArray(new XOutputStream[0])) {
-                    if (com.winlator.core.ProcessHelper.isPauseActive()) return;
-                    deferredStreams.remove(stream);
-                    stream.lock.lock();
-                    try {
-                        stream.flushNow();
-                    }
-                    catch (IOException | RuntimeException ignored) {
-                        // The client is gone; its connection is torn down by the reader side.
-                    }
-                    finally {
-                        stream.lock.unlock();
-                    }
-                }
-                try { Thread.sleep(150); } catch (InterruptedException e) { return; }
-            }
-        }, "XDeferredFlush");
+        if (!deferredStreams.isEmpty()) ensureFlusher();
+    }
+
+    private static void ensureFlusher() {
+        if (!flusherRunning.compareAndSet(false, true)) return;
+        Thread thread = new Thread(XOutputStream::runFlusher, "XDeferredFlush");
         thread.setDaemon(true);
         thread.start();
     }
 
+    private static void runFlusher() {
+        try {
+            int idlePasses = 0;
+            while (idlePasses < 100) {
+                boolean paused = com.winlator.core.ProcessHelper.isPauseActive();
+                if (deferredStreams.isEmpty()) {
+                    backlogHigh = false;
+                    idlePasses++;
+                }
+                else {
+                    idlePasses = 0;
+                    if (!paused) {
+                        boolean high = false;
+                        for (XOutputStream stream : deferredStreams.toArray(new XOutputStream[0])) {
+                            stream.lock.lock();
+                            try {
+                                // flushNow puts the stream back if the client still is not reading.
+                                deferredStreams.remove(stream);
+                                stream.flushNow();
+                                if (stream.buffer.position() >= HIGH_BACKLOG_BYTES) high = true;
+                            }
+                            catch (IOException | RuntimeException e) {
+                                // The client is gone; the reader side tears its connection down.
+                                deferredStreams.remove(stream);
+                            }
+                            finally {
+                                stream.lock.unlock();
+                            }
+                        }
+                        backlogHigh = high;
+                    }
+                }
+                Thread.sleep(paused ? 50 : 4);
+            }
+        }
+        catch (InterruptedException ignored) {
+        }
+        finally {
+            flusherRunning.set(false);
+            // Something may have been deferred between the last look and clearing the flag.
+            if (!deferredStreams.isEmpty()) ensureFlusher();
+        }
+    }
+
+    /** Must be called with [lock] held. */
     private void flushNow() throws IOException {
         if (closed) {
             buffer.clear();
             ancillaryFd = -1;
             return;
         }
-        if (buffer.position() != 0) {
-            buffer.flip();
+        if (buffer.position() == 0) return;
 
-            if (ancillaryFd != -1) {
+        buffer.flip();
+        if (ancillaryFd != -1) {
+            // A message that carries a file descriptor has to go out in one piece with it.
+            try {
                 clientSocket.sendAncillaryMsg(buffer, ancillaryFd);
-                ancillaryFd = -1;
             }
-            else clientSocket.write(buffer);
-
-            buffer.clear();
+            finally {
+                ancillaryFd = -1;
+                buffer.clear();
+            }
+            return;
         }
+
+        int length = buffer.limit();
+        int written;
+        try {
+            written = clientSocket.writeNonBlocking(buffer, length);
+        }
+        catch (IOException e) {
+            buffer.clear();
+            throw e;
+        }
+        if (written >= length) {
+            buffer.clear();
+            return;
+        }
+        // The client's socket is full. Keep the unsent tail at the front; later output is appended
+        // behind it, so the byte order the client sees never changes.
+        buffer.position(written);
+        buffer.compact();
+        if (buffer.position() >= HIGH_BACKLOG_BYTES) backlogHigh = true;
+        deferredStreams.add(this);
+        ensureFlusher();
     }
 
     public XStreamLock lock() {

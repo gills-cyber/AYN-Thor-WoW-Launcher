@@ -96,7 +96,10 @@ class ExternalDisplayInputController(
             return
         }
 
-        val needsNewPresentation = presentation?.display?.displayId != targetDisplay.displayId
+        // A Presentation dismisses itself when its display's metrics change; it has to be rebuilt then,
+        // or the pad stays gone for the rest of the session.
+        val needsNewPresentation = presentation?.display?.displayId != targetDisplay.displayId ||
+            presentation?.isShowing != true
         if (presentation == null || needsNewPresentation) {
             dismissPresentation()
             presentation = ExternalInputPresentation(
