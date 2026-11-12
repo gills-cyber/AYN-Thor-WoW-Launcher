@@ -40,6 +40,9 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.util.EnumSet
 import timber.log.Timber
 
+/** How long the app may be off screen before the game is stopped. */
+private const val GAME_PAUSE_DELAY_MS = 1_500L
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
@@ -135,6 +138,13 @@ class MainActivity : ComponentActivity() {
 
         super.onDestroy()
 
+        pauseHandler.removeCallbacks(gamePauseRunnable)
+        if (pendingGamePause) {
+            // This activity is going away (it is being rebuilt) with a pause still owed: do it now
+            // rather than lose it. The next onResume resumes the game as usual.
+            gamePauseRunnable.run()
+        }
+
         controllerInputManager?.unregisterInputDeviceListener(controllerDeviceListener)
         controllerInputManager = null
 
@@ -165,8 +175,16 @@ class MainActivity : ComponentActivity() {
             applyImmersiveMode()
         }
 
+        // The app came back before the delayed pause ran: the game was never stopped.
+        val pauseWasPending = pendingGamePause
+        if (pauseWasPending) {
+            pendingGamePause = false
+            pauseHandler.removeCallbacks(gamePauseRunnable)
+            Timber.d("Game pause cancelled: app returned within the grace period")
+        }
+
         // Resume game according to the active suspend policy.
-        if (hasReadyGameLifecycleState("resume")) {
+        if (!pauseWasPending && hasReadyGameLifecycleState("resume")) {
             when {
                 PluviaApp.isNeverSuspendMode() -> {
                     Timber.d("Game resume skipped due to suspend policy=never")
@@ -190,8 +208,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onPause() {
-        PluviaApp.isActivityInForeground = false
+    private val pauseHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingGamePause = false
+
+    /**
+     * Stops the game a moment after the app loses the screen instead of at once, so a brief
+     * interruption (a system dialog, a quick glance at another window) does not stop and restart it.
+     */
+    private val gamePauseRunnable = Runnable {
+        pendingGamePause = false
+        if (PluviaApp.isActivityInForeground) return@Runnable
         if (hasReadyGameLifecycleState("pause")) {
             when {
                 PluviaApp.isNeverSuspendMode() -> {
@@ -208,6 +234,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onPause() {
+        PluviaApp.isActivityInForeground = false
+        pauseHandler.removeCallbacks(gamePauseRunnable)
+        pendingGamePause = true
+        pauseHandler.postDelayed(gamePauseRunnable, GAME_PAUSE_DELAY_MS)
         super.onPause()
     }
 

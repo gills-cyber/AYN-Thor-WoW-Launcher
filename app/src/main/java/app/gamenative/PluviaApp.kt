@@ -44,6 +44,7 @@ class PluviaApp : Application() {
 
         CrashHandler.initialize(this)
         PrefManager.init(this)
+        app.gamenative.utils.HealthMonitor.start(this)
     }
 
     companion object {

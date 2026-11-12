@@ -60,6 +60,7 @@ import app.gamenative.ui.theme.WowGold
 import app.gamenative.ui.theme.WowMuted
 import app.gamenative.ui.theme.WowSubtle
 import app.gamenative.utils.AppUpdater
+import app.gamenative.utils.HealthMonitor
 import app.gamenative.utils.StorageUtils
 import app.gamenative.utils.renderReleaseNotes
 import com.winlator.container.Container
@@ -101,6 +102,8 @@ fun WoWForeverScreen(
     var r3Toggle by remember { mutableStateOf(ButtonPad.r3Toggle(context, flavor)) }
     var region by remember { mutableStateOf(WowFlavor.region) }
     var forceGamepadUi by remember { mutableStateOf(ButtonPad.forceGamepadUi(context, flavor)) }
+    var fpsCap by remember { mutableStateOf(FpsCap.get(context, flavor)) }
+    val freeStorageBytes = remember { HealthMonitor.freeBytes(context.filesDir) }
     var gamePath by remember { mutableStateOf(GamePath.load(context)) }
     var files by remember { mutableStateOf(GamePath.Status()) }
     var isLaunching by remember { mutableStateOf(false) }
@@ -203,6 +206,7 @@ fun WoWForeverScreen(
         buttonPad = ButtonPad.isEnabled(context, selected)
         forceGamepadUi = ButtonPad.forceGamepadUi(context, selected)
         r3Toggle = ButtonPad.r3Toggle(context, selected)
+        fpsCap = FpsCap.get(context, selected)
         errorMessage = null
         versionStatus = null
         gamePath = GamePath.load(context)
@@ -437,7 +441,21 @@ fun WoWForeverScreen(
                         r3Toggle = it
                         ButtonPad.setR3Toggle(context, flavor, it)
                     },
+                    fpsCap = fpsCap,
+                    onFpsCap = {
+                        fpsCap = it
+                        FpsCap.set(context, flavor, it)
+                    },
                 )
+                if (freeStorageBytes >= 0) {
+                    val freeGb = freeStorageBytes / (1024.0 * 1024.0 * 1024.0)
+                    Text(
+                        text = "Free storage: " + String.format(java.util.Locale.US, "%.1f GB", freeGb) +
+                            if (freeGb < 2.0) " (low: free up space to avoid problems)" else "",
+                        fontSize = 11.sp,
+                        color = if (freeGb < 2.0) Color(0xFFE0A050) else WowSubtle,
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -1006,6 +1024,8 @@ private fun LaunchSwitches(
     onForceGamepadUi: (Boolean) -> Unit,
     r3Toggle: Boolean,
     onR3Toggle: (Boolean) -> Unit,
+    fpsCap: Int,
+    onFpsCap: (Int) -> Unit,
 ) {
     @Composable
     fun Item(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -1023,6 +1043,22 @@ private fun LaunchSwitches(
         Item("Action button pad", buttonPad, onButtonPad)
         Item("Force gamepad UI", forceGamepadUi, onForceGamepadUi)
         Item("R3 toggles mouse / camera", r3Toggle, onR3Toggle)
+        // Tap to step through the choices. "Game's own" leaves WoW's frame rate settings alone.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .height(48.dp)
+                .clickable(enabled = enabled) { onFpsCap(FpsCap.next(fpsCap)) },
+        ) {
+            Text(text = "Frame cap", fontSize = 12.sp, color = WowMuted)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (fpsCap == 0) "Game's own" else "$fpsCap fps",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = WowFrame,
+            )
+        }
     }
 }
 
@@ -1258,27 +1294,41 @@ private fun checkFreeStorage(context: Context, gameRoot: File) {
     }
 }
 
-private const val FPS_CAP_PREFS = "wow_forever"
-
 /**
- * Once per game: caps the frame rate at 60 (30 in the background) if Config.wtf does not set one.
- * Uncapped, the game renders as fast as the chip allows, which heats the device until it throttles
- * and stutters after long sessions. Done once only, so a cap changed or removed in game stays that way.
+ * The frame cap chosen on the launcher, per game. Uncapped, the game renders as fast as the chip
+ * allows, which heats the device until it throttles and stutters in long sessions.
  */
-private fun applyDefaultFpsCapOnce(context: Context, root: File) {
-    val prefs = context.getSharedPreferences(FPS_CAP_PREFS, Context.MODE_PRIVATE)
-    val key = "fps_cap_applied_${WowFlavor.current.name}"
-    if (prefs.getBoolean(key, false)) return
+private object FpsCap {
+    private const val PREFS = "wow_forever"
+    private const val DEFAULT = 60
+
+    /** 0 means "leave the game's own frame rate settings alone". */
+    private val CHOICES = listOf(30, 45, 60, 90, 120, 0)
+
+    private fun key(flavor: WowFlavor) = "fps_cap_${flavor.name}"
+
+    fun get(context: Context, flavor: WowFlavor): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(key(flavor), DEFAULT).takeIf { it in CHOICES } ?: DEFAULT
+
+    fun set(context: Context, flavor: WowFlavor, cap: Int) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(key(flavor), cap).apply()
+
+    fun next(cap: Int): Int = CHOICES[(CHOICES.indexOf(cap) + 1) % CHOICES.size]
+}
+
+/** Writes the launcher's frame cap into Config.wtf. Does nothing when the cap is "Game's own". */
+private fun applyFpsCap(context: Context, root: File) {
+    val cap = FpsCap.get(context, WowFlavor.current)
+    if (cap == 0) return
     val configWtf = File(File(root, FLAVOR_DIR), "WTF/Config.wtf")
     if (!configWtf.isFile) return
-    val lines = configWtf.readLines()
-    fun has(name: String) = lines.any { it.startsWith("SET $name ", ignoreCase = true) }
-    if (!has("maxFPS") && !has("useMaxFPS") && !has("targetFPS") && !has("useTargetFPS")) {
-        val added = listOf("SET useMaxFPS \"1\"", "SET maxFPS \"60\"") +
-            (if (!has("maxFPSBk") && !has("useMaxFPSBk")) listOf("SET useMaxFPSBk \"1\"", "SET maxFPSBk \"30\"") else emptyList())
-        configWtf.writeText((lines + added).joinToString("\n") + "\n")
-    }
-    prefs.edit().putBoolean(key, true).apply()
+    val original = configWtf.readLines()
+    fun isSetting(line: String, name: String) = line.startsWith("SET $name ", ignoreCase = true)
+    val kept = original.filterNot { isSetting(it, "maxFPS") || isSetting(it, "useMaxFPS") }
+    val hasBackgroundCap = kept.any { isSetting(it, "maxFPSBk") || isSetting(it, "useMaxFPSBk") }
+    val updated = kept + listOf("SET useMaxFPS \"1\"", "SET maxFPS \"$cap\"") +
+        (if (hasBackgroundCap) emptyList() else listOf("SET useMaxFPSBk \"1\"", "SET maxFPSBk \"30\""))
+    if (updated != original) configWtf.writeText(updated.joinToString("\n") + "\n")
 }
 
 private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onStatus: (String) -> Unit): String {
@@ -1292,7 +1342,7 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onS
         PadSettings.launchProfile(WowFlavor.current.name).takeIf { it > 0 }?.let { PadSettings.loadProfile(it) }
         PadSettings.set(PadSettings.R3_TOGGLE, ButtonPad.r3Toggle(context, WowFlavor.current))
         ensureGameConfig(gameRoot, if (ButtonPad.forceGamepadUi(context, WowFlavor.current)) 0 else 1)
-        applyDefaultFpsCapOnce(context, gameRoot)
+        applyFpsCap(context, gameRoot)
     } catch (e: Exception) {
         if (e.isPermissionDenied()) throw StorageAccessDeniedException(e)
         throw e

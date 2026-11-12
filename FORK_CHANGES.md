@@ -26,8 +26,10 @@ release; they come from reading the source.
 
 ## Performance
 
-- One-time default frame cap (60 fps, 30 in the background) when Config.wtf sets none, to limit heat
-  and thermal throttling over long sessions. Change or remove it in the game's settings.
+- A **Frame cap** setting on the launcher, per game (30, 45, 60, 90, 120 or "Game's own"). It
+  defaults to 60 fps, with 30 in the background, to limit heat and thermal throttling over long
+  sessions. The launcher writes it into Config.wtf at each launch; "Game's own" leaves WoW's
+  settings alone.
 - X output buffers grow geometrically instead of being recopied on every write when full.
 
 ## Other
@@ -44,3 +46,12 @@ release; they come from reading the source.
   file descriptor.
 - Key auto-repeat pauses while the game is suspended.
 - The second-screen pad is rebuilt if Android dismisses it after a display change.
+
+## Diagnostics and comfort (2.7.0.1)
+
+- **Freeze reports.** If the app stops responding for more than four seconds, a report of what every
+  thread was doing, plus free memory and storage, is written to
+  `Android/data/app.aynthorwow/files/freeze_logs/` (the newest five are kept).
+- **Low storage warning during play** (under 200 MB free), and the launcher shows free storage.
+- **The game is stopped 1.5 seconds after the app loses the screen**, not at once, so brief
+  interruptions no longer stop and restart it.
