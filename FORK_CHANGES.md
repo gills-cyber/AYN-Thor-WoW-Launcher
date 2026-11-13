@@ -69,3 +69,9 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 - The `gethostname()` shim returns the stored computer name (env var `GAMENATIVE_HOSTNAME`) instead of the IP address.
 - Not implemented: the optional "type the credentials with human-like timing" idea from the issue.
 - Untested on a device.
+
+## 2.7.0.3: top screen and right side up
+
+- If the launcher is opened on a secondary screen (the Thor's bottom screen), it reopens itself on the primary (top) screen. This is skipped while a game is running.
+- The game uses fixed landscape instead of sensor landscape, so the tilt sensor can no longer flip the picture upside down.
+- Untested on a device. Assumes the Thor reports its top screen as Android's primary display.

@@ -2,6 +2,7 @@ package app.gamenative
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -10,6 +11,7 @@ import android.graphics.Color.TRANSPARENT
 import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Display
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
@@ -42,6 +44,7 @@ import timber.log.Timber
 
 /** How long the app may be off screen before the game is stopped. */
 private const val GAME_PAUSE_DELAY_MS = 1_500L
+private const val EXTRA_MOVED_TO_PRIMARY = "app.gamenative.MOVED_TO_PRIMARY_DISPLAY"
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -94,6 +97,9 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
 
+        // Dual-screen handhelds (AYN Thor): always start on the main (top) screen.
+        if (savedInstanceState == null && moveToPrimaryDisplayIfNeeded()) return
+
         // stale keepAlive from a prior crash/swipe — no container is actually running
         if (PluviaApp.keepAlive && PluviaApp.xEnvironment == null) {
             Timber.w("onCreate: clearing stale keepAlive — no container running")
@@ -122,7 +128,45 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    /**
+     * When the launcher was opened on a secondary screen (the Thor's bottom screen), reopen it
+     * on the primary one and close this instance. Returns true when this instance is closing.
+     * Never done while a game is running, because closing the activity would end the game.
+     */
+    private fun moveToPrimaryDisplayIfNeeded(): Boolean {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+            if (PluviaApp.keepAlive || PluviaApp.xEnvironment != null) return false
+            if (intent?.getBooleanExtra(EXTRA_MOVED_TO_PRIMARY, false) == true) return false
+            @Suppress("DEPRECATION")
+            val current = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay)
+                ?: return false
+            if (current.displayId == Display.DEFAULT_DISPLAY) return false
+
+            val relaunch = Intent(intent ?: Intent()).apply {
+                setClass(this@MainActivity, MainActivity::class.java)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                putExtra(EXTRA_MOVED_TO_PRIMARY, true)
+            }
+            val options = ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY)
+            Timber.i("Started on display %d, reopening on the primary display", current.displayId)
+            startActivity(relaunch, options.toBundle())
+            redirectedToPrimary = true
+            finishAndRemoveTask()
+            return true
+        } catch (e: Exception) {
+            Timber.w(e, "Could not move the launcher to the primary display")
+            redirectedToPrimary = false
+            return false
+        }
+    }
+
     override fun onDestroy() {
+        if (redirectedToPrimary) {
+            // Nothing was set up in onCreate, and the replacement activity must not see ActivityDestroyed.
+            super.onDestroy()
+            return
+        }
         // emit before super so Compose DisposableEffects (which unregister
         // listeners during super.onDestroy's lifecycle transition) still fire
         if (!isChangingConfigurations) {
@@ -210,6 +254,7 @@ class MainActivity : ComponentActivity() {
 
     private val pauseHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingGamePause = false
+    private var redirectedToPrimary = false
 
     /**
      * Stops the game a moment after the app loses the screen instead of at once, so a brief
@@ -327,8 +372,10 @@ class MainActivity : ComponentActivity() {
     private fun setOrientationTo(conformTo: EnumSet<Orientation>) {
         requestedOrientation = when {
             conformTo.contains(Orientation.PORTRAIT) -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            // Fixed landscape, not sensor landscape: the tilt sensor could flip the picture
+            // upside down on a clamshell handheld.
             conformTo.contains(Orientation.LANDSCAPE) && conformTo.contains(Orientation.REVERSE_LANDSCAPE) ->
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             conformTo.contains(Orientation.LANDSCAPE) -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             conformTo.contains(Orientation.REVERSE_LANDSCAPE) -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
             else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
