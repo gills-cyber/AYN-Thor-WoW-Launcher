@@ -15,8 +15,8 @@ import org.json.JSONObject
 import timber.log.Timber
 
 object AppUpdater {
-    private const val RELEASES_URL = "https://api.github.com/repos/wyattabuntjer/AYN-Thor-WoW-Launcher/releases/latest"
-    private const val RELEASES_LIST_URL = "https://api.github.com/repos/wyattabuntjer/AYN-Thor-WoW-Launcher/releases?per_page=10"
+    private const val RELEASES_URL = "https://api.github.com/repos/gills-cyber/AYN-Thor-WoW-Launcher/releases/latest"
+    private const val RELEASES_LIST_URL = "https://api.github.com/repos/gills-cyber/AYN-Thor-WoW-Launcher/releases?per_page=10"
     private const val KEY_BETA = "beta_updates"
     private const val KEY_SKIP_AUTO = "skip_auto_updates"
 
@@ -158,6 +158,24 @@ object AppUpdater {
         }
         Net.fetchFile(release.downloadUrl, dest, onProgress)
         dest
+    }
+
+    /**
+     * Deletes downloaded update APKs that are no longer useful: ones for this version or older (they
+     * are installed already). Each APK is large, and nothing else ever removes them.
+     */
+    fun cleanupDownloads(context: Context) {
+        runCatching {
+            File(context.cacheDir, "updates").listFiles()?.forEach { file ->
+                if (file.name.endsWith(".apk")) {
+                    val version = file.name.removePrefix("WoW-Forever-").removeSuffix(".apk")
+                    if (!isNewer(version)) file.delete()
+                } else if (System.currentTimeMillis() - file.lastModified() > 24 * 60 * 60 * 1000L) {
+                    // A partial download nobody came back to.
+                    file.delete()
+                }
+            }
+        }.onFailure { Timber.w(it, "Update download cleanup failed") }
     }
 
     fun canInstall(context: Context): Boolean = runCatching {

@@ -153,20 +153,24 @@ public class PulseAudioComponent extends EnvironmentComponent {
 
     public void resume() {
         singleThreadExecutor.execute(() -> {
-            if (isPaused.get()) {
-                if (!isPauseResumeRunning.get()) {
-                    isPauseResumeRunning.set(true);
-                    Timber.tag("PulseAudioComponent").d("Resuming...");
-
-                    if (updateSink(false)) {
-                        isPaused.set(false);
-                        Timber.tag("PulseAudioComponent").d("Audio resumed");
-                    } else {
-                        Timber.tag("PulseAudioComponent").d("Failed to resume Audio");
-                    }
-
-                    isPauseResumeRunning.set(false);
+            // Always un-suspend, whatever isPaused says. A pause whose pactl call timed out leaves the
+            // flag false with the sink possibly suspended, and a failed resume used to leave it
+            // suspended for the rest of the session, which stalls the game's audio thread.
+            isPauseResumeRunning.set(true);
+            try {
+                Timber.tag("PulseAudioComponent").d("Resuming...");
+                boolean resumed = false;
+                for (int attempt = 0; attempt < 3 && !resumed; attempt++) {
+                    resumed = updateSink(false);
                 }
+                if (resumed) {
+                    isPaused.set(false);
+                    Timber.tag("PulseAudioComponent").d("Audio resumed");
+                } else {
+                    Timber.tag("PulseAudioComponent").w("Failed to resume Audio");
+                }
+            } finally {
+                isPauseResumeRunning.set(false);
             }
         });
     }

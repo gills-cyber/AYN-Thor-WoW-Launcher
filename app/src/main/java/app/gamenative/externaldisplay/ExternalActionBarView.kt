@@ -279,16 +279,24 @@ class ExternalActionBarView(
             }
             // Only buttons that take an armed modifier glow: not the page buttons, nor ones remapped to a combo.
             if (!slot.isolated && (comboFor(slot).mods.isEmpty() || mergesModifiers(slot))) modifierAffected.add(this)
+            // The key this button put down, so the release always matches the press even if the
+            // button is remapped in between.
+            var pressedKey: XKeycode? = null
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         view.isPressed = true
                         PadSettings.haptic(view)
-                        pressKey(comboFor(slot), isolated = slot.isolated, mergeModifiers = mergesModifiers(slot))
+                        // A release that never arrived must not leave the old key down.
+                        pressedKey?.let { releaseKey(it) }
+                        val combo = comboFor(slot)
+                        pressedKey = combo.key
+                        pressKey(combo, isolated = slot.isolated, mergeModifiers = mergesModifiers(slot))
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         view.isPressed = false
-                        releaseKey(comboFor(slot).key)
+                        releaseKey(pressedKey ?: comboFor(slot).key)
+                        pressedKey = null
                         if (event.actionMasked == MotionEvent.ACTION_UP &&
                             (slot.label == "Chat" || slot.label == "Slash" || slot.label == "Reply")
                         ) onChatTyping()
@@ -316,7 +324,10 @@ class ExternalActionBarView(
     private fun mergesModifiers(slot: Slot) = !slot.isolated && slot.label.removePrefix("Ex").toIntOrNull() in 6..10 && slot.label.startsWith("Ex")
 
     private fun pressKey(combo: KeyCombo, isolated: Boolean = false, mergeModifiers: Boolean = false) {
-        if (downKeys.containsKey(combo.key)) return
+        // The key is already down: another button sends the same key (System and Close are both
+        // Escape), or an earlier touch never delivered its release. Ignoring the press here would
+        // leave the button dead until the pad is rebuilt, so let go of the key and press it again.
+        if (downKeys.containsKey(combo.key)) releaseKey(combo.key)
         // A button with its own modifiers, or an isolated one, must not pick up Shift, Ctrl or Alt held on the pad,
         // unless it is meant to add its own on top of them.
         val isolate = isolated || (combo.mods.isNotEmpty() && !mergeModifiers)

@@ -263,6 +263,8 @@ public class XConnectorEpoll implements Runnable {
             this.connectionHandler.handleConnectionShutdown(client);
             removeFdFromEpoll(this.epollFd, client.clientSocket.fd);
         }
+        XOutputStream clientOutput = client.getOutputStream();
+        if (clientOutput != null) clientOutput.discardDeferred();
         closeTrackedFd(client.clientSocket.fd);
         this.connectedClients.remove(client.clientSocket.fd);
     }

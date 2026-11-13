@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -32,15 +34,61 @@ jobs:
       - name: Fetch runtime components
         run: tools/fetch_components.sh
 
+      # Small native pieces of the fork. The other .so files in jniLibs are prebuilt and are not
+      # compiled by Gradle, so changes to their C sources would otherwise never reach the APK.
+      - name: Build native libraries
+        run: |
+          set -euo pipefail
+          BIN="$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CC="$BIN/aarch64-linux-android29-clang"
+          OUT=app/src/main/jniLibs/arm64-v8a
+          FLAGS="-shared -fPIC -O2 -Wall -Wl,-z,max-page-size=16384"
+          "$CC" $FLAGS -o "$OUT/libxnonblock.so" app/src/main/cpp/fork/xnonblock.c
+          "$CC" $FLAGS -o "$OUT/libgamenative_dns_v4mapped.so" app/src/main/cpp/gamenative_dns_v4mapped.c -ldl
+          "$BIN/llvm-strip" --strip-unneeded "$OUT/libxnonblock.so" "$OUT/libgamenative_dns_v4mapped.so"
+          "$BIN/llvm-readelf" --dyn-syms -W "$OUT/libxnonblock.so" > /tmp/xnonblock.syms
+          "$BIN/llvm-readelf" --dyn-syms -W "$OUT/libgamenative_dns_v4mapped.so" > /tmp/dns.syms
+          cat /tmp/xnonblock.syms /tmp/dns.syms
+          grep -q Java_com_winlator_xconnector_NonBlockingSocket_send /tmp/xnonblock.syms
+          for sym in gethostname getaddrinfo freeaddrinfo res_query gethostbyname gethostbyname_r; do
+            grep -Eq "FUNC +GLOBAL +DEFAULT +[0-9]+ $sym(@.*)?\$" /tmp/dns.syms
+          done
+          grep -q GAMENATIVE_HOSTNAME "$OUT/libgamenative_dns_v4mapped.so"
+
       - name: Unit tests
         run: ./gradlew testModernDebugUnitTest
 
       - name: Build debug APK
         run: ./gradlew assembleModernDebug
 
+      - name: Check native libraries are in the APK
+        run: |
+          set -euo pipefail
+          for lib in libxnonblock.so libgamenative_dns_v4mapped.so libwinlator.so; do
+            unzip -l app/build/outputs/apk/modern/debug/*.apk > /tmp/apk.list
+            grep -q "lib/arm64-v8a/$lib" /tmp/apk.list
+          done
+
       - uses: actions/upload-artifact@v4
         with:
-          name: wow-${{ github.ref_name }}-${{ github.sha }}
+          # Branch names can contain "/", which artifact names may not.
+          name: WoWLauncher-${{ github.sha }}
           path: app/build/outputs/apk/modern/debug/*.apk
           # Private-repo artifacts count against the account's Actions storage; keep them one day.
           retention-days: ${{ github.event.repository.private && 1 || 14 }}
+
+      # Pushing a tag like v2.7.0.5 publishes the APK as a permanent GitHub release, which is also
+      # where the in-app updater looks.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          APK="WoW-Forever-$VERSION.apk"
+          cp app/build/outputs/apk/modern/debug/*.apk "$APK"
+          gh release create "$GITHUB_REF_NAME" "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Version $VERSION" \
+            --notes "Stability fork of the AYN Thor WoW Launcher. See FORK_CHANGES.md for what changed."

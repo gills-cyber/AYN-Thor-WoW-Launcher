@@ -60,6 +60,7 @@ import app.gamenative.ui.theme.WowGold
 import app.gamenative.ui.theme.WowMuted
 import app.gamenative.ui.theme.WowSubtle
 import app.gamenative.utils.AppUpdater
+import app.gamenative.utils.HealthMonitor
 import app.gamenative.utils.StorageUtils
 import app.gamenative.utils.renderReleaseNotes
 import com.winlator.container.Container
@@ -101,6 +102,8 @@ fun WoWForeverScreen(
     var r3Toggle by remember { mutableStateOf(ButtonPad.r3Toggle(context, flavor)) }
     var region by remember { mutableStateOf(WowFlavor.region) }
     var forceGamepadUi by remember { mutableStateOf(ButtonPad.forceGamepadUi(context, flavor)) }
+    var fpsCap by remember { mutableStateOf(FpsCap.get(context, flavor)) }
+    val freeStorageBytes = remember { HealthMonitor.freeBytes(context.filesDir) }
     var gamePath by remember { mutableStateOf(GamePath.load(context)) }
     var files by remember { mutableStateOf(GamePath.Status()) }
     var isLaunching by remember { mutableStateOf(false) }
@@ -203,6 +206,7 @@ fun WoWForeverScreen(
         buttonPad = ButtonPad.isEnabled(context, selected)
         forceGamepadUi = ButtonPad.forceGamepadUi(context, selected)
         r3Toggle = ButtonPad.r3Toggle(context, selected)
+        fpsCap = FpsCap.get(context, selected)
         errorMessage = null
         versionStatus = null
         gamePath = GamePath.load(context)
@@ -437,7 +441,21 @@ fun WoWForeverScreen(
                         r3Toggle = it
                         ButtonPad.setR3Toggle(context, flavor, it)
                     },
+                    fpsCap = fpsCap,
+                    onFpsCap = {
+                        fpsCap = it
+                        FpsCap.set(context, flavor, it)
+                    },
                 )
+                if (freeStorageBytes >= 0) {
+                    val freeGb = freeStorageBytes / (1024.0 * 1024.0 * 1024.0)
+                    Text(
+                        text = "Free storage: " + String.format(java.util.Locale.US, "%.1f GB", freeGb) +
+                            if (freeGb < 2.0) " (low: free up space to avoid problems)" else "",
+                        fontSize = 11.sp,
+                        color = if (freeGb < 2.0) Color(0xFFE0A050) else WowSubtle,
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -1006,6 +1024,8 @@ private fun LaunchSwitches(
     onForceGamepadUi: (Boolean) -> Unit,
     r3Toggle: Boolean,
     onR3Toggle: (Boolean) -> Unit,
+    fpsCap: Int,
+    onFpsCap: (Int) -> Unit,
 ) {
     @Composable
     fun Item(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -1023,6 +1043,22 @@ private fun LaunchSwitches(
         Item("Action button pad", buttonPad, onButtonPad)
         Item("Force gamepad UI", forceGamepadUi, onForceGamepadUi)
         Item("R3 toggles mouse / camera", r3Toggle, onR3Toggle)
+        // Tap to step through the choices. "Game's own" leaves WoW's frame rate settings alone.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .height(48.dp)
+                .clickable(enabled = enabled) { onFpsCap(FpsCap.next(fpsCap)) },
+        ) {
+            Text(text = "Frame cap", fontSize = 12.sp, color = WowMuted)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (fpsCap == 0) "Game's own" else "$fpsCap fps",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = WowFrame,
+            )
+        }
     }
 }
 
@@ -1234,7 +1270,70 @@ private data class GpuProfile(val driver: String, val tuDebug: String, val scree
     }
 }
 
+/** Free space below which the launcher refuses to start the game. */
+private const val MIN_FREE_APP_STORAGE_BYTES = 300L * 1024 * 1024
+private const val MIN_FREE_GAME_STORAGE_BYTES = 100L * 1024 * 1024
+
+/**
+ * Wine rewrites its registry and WoW rewrites its settings and caches while the game runs. With the
+ * storage full those writes are cut short, which leaves a prefix that no longer starts and makes
+ * every app on the device misbehave. Stop here with a clear message instead.
+ */
+private fun checkFreeStorage(context: Context, gameRoot: File) {
+    fun freeBytes(dir: File): Long? = runCatching { android.os.StatFs(dir.path).availableBytes }.getOrNull()
+    fun mb(bytes: Long) = bytes / (1024 * 1024)
+    freeBytes(context.filesDir)?.let { free ->
+        check(free >= MIN_FREE_APP_STORAGE_BYTES) {
+            "Only ${mb(free)} MB free on internal storage. Free up at least ${mb(MIN_FREE_APP_STORAGE_BYTES)} MB, then press Play again."
+        }
+    }
+    freeBytes(gameRoot)?.let { free ->
+        check(free >= MIN_FREE_GAME_STORAGE_BYTES) {
+            "Only ${mb(free)} MB free where the game files are. Free up at least ${mb(MIN_FREE_GAME_STORAGE_BYTES)} MB, then press Play again."
+        }
+    }
+}
+
+/**
+ * The frame cap chosen on the launcher, per game. Uncapped, the game renders as fast as the chip
+ * allows, which heats the device until it throttles and stutters in long sessions.
+ */
+private object FpsCap {
+    private const val PREFS = "wow_forever"
+    private const val DEFAULT = 60
+
+    /** 0 means "leave the game's own frame rate settings alone". */
+    private val CHOICES = listOf(30, 45, 60, 90, 120, 0)
+
+    private fun key(flavor: WowFlavor) = "fps_cap_${flavor.name}"
+
+    fun get(context: Context, flavor: WowFlavor): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(key(flavor), DEFAULT).takeIf { it in CHOICES } ?: DEFAULT
+
+    fun set(context: Context, flavor: WowFlavor, cap: Int) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(key(flavor), cap).apply()
+
+    fun next(cap: Int): Int = CHOICES[(CHOICES.indexOf(cap) + 1) % CHOICES.size]
+}
+
+/** Writes the launcher's frame cap into Config.wtf. Does nothing when the cap is "Game's own". */
+private fun applyFpsCap(context: Context, root: File) {
+    val cap = FpsCap.get(context, WowFlavor.current)
+    if (cap == 0) return
+    val configWtf = File(File(root, FLAVOR_DIR), "WTF/Config.wtf")
+    if (!configWtf.isFile) return
+    val original = configWtf.readLines()
+    fun isSetting(line: String, name: String) = line.startsWith("SET $name ", ignoreCase = true)
+    val kept = original.filterNot { isSetting(it, "maxFPS") || isSetting(it, "useMaxFPS") }
+    val hasBackgroundCap = kept.any { isSetting(it, "maxFPSBk") || isSetting(it, "useMaxFPSBk") }
+    val updated = kept + listOf("SET useMaxFPS \"1\"", "SET maxFPS \"$cap\"") +
+        (if (hasBackgroundCap) emptyList() else listOf("SET useMaxFPSBk \"1\"", "SET maxFPSBk \"30\""))
+    if (updated != original) configWtf.writeText(updated.joinToString("\n") + "\n")
+}
+
 private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onStatus: (String) -> Unit): String {
+    checkFreeStorage(context, gameRoot)
+    AppUpdater.cleanupDownloads(context)
     installBundledComponents(context, onStatus)
 
     check(File(gameRoot, BUILD_INFO).exists()) { "Missing $BUILD_INFO in $gameRoot. Copy it from your WoW install." }
@@ -1243,6 +1342,7 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onS
         PadSettings.launchProfile(WowFlavor.current.name).takeIf { it > 0 }?.let { PadSettings.loadProfile(it) }
         PadSettings.set(PadSettings.R3_TOGGLE, ButtonPad.r3Toggle(context, WowFlavor.current))
         ensureGameConfig(gameRoot, if (ButtonPad.forceGamepadUi(context, WowFlavor.current)) 0 else 1)
+        applyFpsCap(context, gameRoot)
     } catch (e: Exception) {
         if (e.isPermissionDenied()) throw StorageAccessDeniedException(e)
         throw e
@@ -1310,6 +1410,9 @@ private fun containerConfig(gameRoot: File, gpu: GpuProfile, exeName: String, sc
         put("showFPS", true)
         put("startupSelection", Container.STARTUP_SELECTION_AGGRESSIVE.toInt())
         put("wow64Mode", true)
+        // Resume by itself when the app comes back or the menu closes. The default ("manual") leaves the
+        // game frozen behind an unlabeled button every time the app loses the screen for a moment.
+        put("suspendPolicy", Container.SUSPEND_POLICY_AUTO)
         put("wincomponents", "direct3d=0,directsound=0,directinput8=0,directinput=0,directmusic=0,directshow=0,directplay=0,vcrun2010=0,wmdecoder=0,opengl=0")
     }
 }

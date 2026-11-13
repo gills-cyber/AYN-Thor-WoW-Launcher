@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #define DNS_LOG(format, ...) \
@@ -260,11 +261,76 @@ static int map_ipv4_results(const struct addrinfo *ipv4, struct addrinfo **resul
     return 0;
 }
 
+/*
+ * The device's routable IPv4 address as text.  Connecting a UDP socket reveals
+ * the source address the kernel would use, without the interface enumeration
+ * the app sandbox filters.  connect() on a datagram socket sends no packets.
+ * Returns 0 on success.
+ */
+static int routable_ipv4(char *out, size_t len)
+{
+    struct sockaddr_in probe;
+    socklen_t probe_len = sizeof(probe);
+    char address[INET_ADDRSTRLEN];
+    int fd;
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return -1;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.sin_family = AF_INET;
+    probe.sin_port = htons(53);
+    probe.sin_addr.s_addr = htonl(0x08080808); /* any routable destination */
+    if (connect(fd, (const struct sockaddr *)&probe, sizeof(probe)) != 0 ||
+        getsockname(fd, (struct sockaddr *)&probe, &probe_len) != 0)
+    {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+
+    if (probe.sin_addr.s_addr == 0 ||
+        (ntohl(probe.sin_addr.s_addr) >> 24) == 127)
+        return -1;
+    if (!inet_ntop(AF_INET, &probe.sin_addr, address, sizeof(address)))
+        return -1;
+    if (strlen(address) + 1 > len)
+        return -1;
+    memcpy(out, address, strlen(address) + 1);
+    return 0;
+}
+
+/* The stable per-install computer name supplied by the app, or NULL. */
+static const char *fixed_hostname(void)
+{
+    const char *fixed = getenv("GAMENATIVE_HOSTNAME");
+    return (fixed && fixed[0] != '\0') ? fixed : NULL;
+}
+
+/*
+ * The fixed computer name is not in any DNS.  A lookup of it must still give
+ * the device's own address, exactly as when gethostname() reported the IP
+ * itself.  Returns the name to really look up: an address in buf when node is
+ * our own name, node otherwise.
+ */
+static const char *own_name_to_address(const char *node, char *buf, size_t len)
+{
+    const char *fixed = fixed_hostname();
+
+    if (!node || !fixed || strcasecmp(node, fixed) != 0)
+        return node;
+    if (routable_ipv4(buf, len) != 0)
+        snprintf(buf, len, "127.0.0.1");
+    return buf;
+}
+
 int getaddrinfo(const char *node, const char *service,
                 const struct addrinfo *hints, struct addrinfo **result)
 {
     struct addrinfo fallback_hints;
     struct addrinfo *ipv4 = NULL;
+    char own_address[INET_ADDRSTRLEN];
     int ret;
 
     pthread_once(&resolver_once, resolve_next_symbols);
@@ -273,6 +339,8 @@ int getaddrinfo(const char *node, const char *service,
         errno = ENOSYS;
         return EAI_SYSTEM;
     }
+
+    node = own_name_to_address(node, own_address, sizeof(own_address));
 
     if (hints && hints->ai_family != AF_INET6 &&
         (hints->ai_flags & (AI_V4MAPPED | AI_ALL)))
@@ -345,10 +413,27 @@ void freeaddrinfo(struct addrinfo *result)
  */
 int gethostname(char *name, size_t len)
 {
-    struct sockaddr_in probe;
-    socklen_t probe_len = sizeof(probe);
     char address[INET_ADDRSTRLEN];
-    int ret, fd;
+    const char *fixed;
+    size_t fixed_len;
+    int ret;
+
+    /*
+     * A stable per-install computer name supplied by the app.  Without it the
+     * Windows computer name followed the device IP and changed per network,
+     * which Battle.net rejects with error BLZ51914400.  Lookups of this name
+     * are answered with the device address, see own_name_to_address().
+     */
+    fixed = fixed_hostname();
+    if (fixed && name)
+    {
+        fixed_len = strlen(fixed);
+        if (fixed_len + 1 <= len)
+        {
+            memcpy(name, fixed, fixed_len + 1);
+            return 0;
+        }
+    }
 
     pthread_once(&resolver_once, resolve_next_symbols);
     if (!next_gethostname)
@@ -363,26 +448,7 @@ int gethostname(char *name, size_t len)
     if (strcmp(name, "localhost") != 0 && name[0] != '\0')
         return 0;
 
-    fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0)
-        return 0;
-
-    memset(&probe, 0, sizeof(probe));
-    probe.sin_family = AF_INET;
-    probe.sin_port = htons(53);
-    probe.sin_addr.s_addr = htonl(0x08080808); /* any routable destination */
-    if (connect(fd, (const struct sockaddr *)&probe, sizeof(probe)) != 0 ||
-        getsockname(fd, (struct sockaddr *)&probe, &probe_len) != 0)
-    {
-        close(fd);
-        return 0;
-    }
-    close(fd);
-
-    if (probe.sin_addr.s_addr == 0 ||
-        (ntohl(probe.sin_addr.s_addr) >> 24) == 127)
-        return 0;
-    if (!inet_ntop(AF_INET, &probe.sin_addr, address, sizeof(address)))
+    if (routable_ipv4(address, sizeof(address)) != 0)
         return 0;
     if (strlen(address) + 1 > len)
         return 0;
@@ -390,4 +456,39 @@ int gethostname(char *name, size_t len)
     memcpy(name, address, strlen(address) + 1);
     DNS_LOG("gethostname -> %s (hostname was localhost)", address);
     return 0;
+}
+
+/* The older lookup calls get the same answer for the fixed computer name. */
+struct hostent *gethostbyname(const char *name)
+{
+    static struct hostent *(*next)(const char *);
+    char own_address[INET_ADDRSTRLEN];
+
+    if (!next)
+        next = dlsym(RTLD_NEXT, "gethostbyname");
+    if (!next)
+    {
+        h_errno = NO_RECOVERY;
+        return NULL;
+    }
+    return next(own_name_to_address(name, own_address, sizeof(own_address)));
+}
+
+int gethostbyname_r(const char *name, struct hostent *ret, char *buf,
+                    size_t buflen, struct hostent **result, int *h_errnop)
+{
+    static int (*next)(const char *, struct hostent *, char *, size_t,
+                       struct hostent **, int *);
+    char own_address[INET_ADDRSTRLEN];
+
+    if (!next)
+        next = dlsym(RTLD_NEXT, "gethostbyname_r");
+    if (!next)
+    {
+        if (result) *result = NULL;
+        if (h_errnop) *h_errnop = NO_RECOVERY;
+        return ENOSYS;
+    }
+    return next(own_name_to_address(name, own_address, sizeof(own_address)),
+                ret, buf, buflen, result, h_errnop);
 }

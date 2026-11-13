@@ -37,6 +37,22 @@ public abstract class ProcessHelper {
     private static volatile boolean pauseActive = false;
     private static final Object pauseSignalLock = new Object();
 
+    /** True between a pause sweep and the matching resume: the Wine processes are (being) stopped. */
+    public static boolean isPauseActive() {
+        return pauseActive;
+    }
+
+    /**
+     * Forgets a pause that was never resumed (the game was closed or killed while suspended).
+     * Without this a stale flag would make the next session treat its fresh clients as stopped.
+     */
+    public static void clearPauseState() {
+        synchronized (pauseSignalLock) {
+            pauseActive = false;
+        }
+        com.winlator.xconnector.XOutputStream.flushDeferredAsync();
+    }
+
     public static void suspendProcess(int pid) {
         Process.sendSignal(pid, SIGSTOP);
     }
@@ -64,6 +80,7 @@ public abstract class ProcessHelper {
         for (String process : listRunningWineProcesses()) {
             killProcess(Integer.parseInt(process));
         }
+        clearPauseState();
     }
 
     public static void hardKillStaleWineProcesses() throws InterruptedException {
@@ -170,6 +187,8 @@ public abstract class ProcessHelper {
                 resumeProcess(Integer.parseInt(process));
             }
         }
+        // Hand the clients everything the X server held back while they were stopped.
+        com.winlator.xconnector.XOutputStream.flushDeferredAsync();
     }
 
     public static int exec(String command) {
@@ -591,6 +610,7 @@ public abstract class ProcessHelper {
                 return new File(proc, filename).isDirectory() && filename.matches("[0-9]+");
             }
         });
+        if (allPids == null) return filteredPids;
 
         String procFile = "/cmdline";
         for (int index = 0; index < allPids.length; index++){
@@ -604,8 +624,10 @@ public abstract class ProcessHelper {
             }
             catch (IOException e) {}
             for (String filter : filterList) {
-                if (data.contains(filter))
+                if (data.contains(filter)) {
                     filteredPids.add(allPids[index]);
+                    break; // one entry per process, even when both filters match
+                }
             }
         }
         return filteredPids;

@@ -52,6 +52,22 @@ public class ClientSocket {
         else throw new IOException("Failed to write data.");
     }
 
+    /**
+     * Writes as much of the first [length] bytes of [data] as the socket takes right now, without
+     * ever waiting for the client. Returns how many bytes went out (possibly 0). Falls back to a
+     * blocking write of everything when the non-blocking library is not in the APK.
+     */
+    public int writeNonBlocking(ByteBuffer data, int length) throws IOException {
+        int bytesWritten = NonBlockingSocket.trySend(fd, data, length);
+        if (bytesWritten == -2) {
+            // No non-blocking send in this build: write the way the original app did (waits for the client).
+            write(data);
+            return length;
+        }
+        if (bytesWritten < 0) throw new IOException("Failed to write data.");
+        return bytesWritten;
+    }
+
     public int recvAncillaryMsg(ByteBuffer data) throws IOException {
         int position = data.position();
         int bytesRead = recvAncillaryMsg(fd, data, position, data.remaining());

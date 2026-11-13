@@ -32,7 +32,10 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
         @Override
         public void run() {
             if (xServer.keyboard.getPressedKeys().contains(currentRepeatingKeycode)) {
-                onKeyPress(currentRepeatingKeycode, currentRepeatingKeysym);
+                // No repeats for a suspended game: they would all be replayed at once on resume.
+                if (!com.winlator.core.ProcessHelper.isPauseActive()) {
+                    onKeyPress(currentRepeatingKeycode, currentRepeatingKeysym);
+                }
                 autoRepeatHandler.postDelayed(this, repeatRateMs);
             }
         }
