@@ -228,28 +228,6 @@ Java_com_winlator_xconnector_ClientSocket_write(JNIEnv *env, jobject obj, jint f
     return write(fd, dataAddr, length);
 }
 
-// Sends as much as the socket takes right now and never waits for the peer. Returns the number of
-// bytes sent (0 when the socket buffer is full), or -1 when the connection is broken.
-JNIEXPORT jint JNICALL
-Java_com_winlator_xconnector_ClientSocket_writeNonBlocking(JNIEnv *env, jobject obj, jint fd, jobject data,
-                                                           jint length) {
-    char *dataAddr = (*env)->GetDirectBufferAddress(env, data);
-    if (dataAddr == NULL || length < 0) return -1;
-
-    jint total = 0;
-    while (total < length) {
-        ssize_t sent = send(fd, dataAddr + total, (size_t)(length - total), MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (sent > 0) {
-            total += (jint)sent;
-            continue;
-        }
-        if (sent < 0 && errno == EINTR) continue;
-        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-        return -1;
-    }
-    return total;
-}
-
 JNIEXPORT jint JNICALL
 Java_com_winlator_xconnector_XConnectorEpoll_createEventFd(JNIEnv *env, jobject obj) {
     int fd = eventfd(0, EFD_NONBLOCK);

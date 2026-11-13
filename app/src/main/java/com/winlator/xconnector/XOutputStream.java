@@ -109,6 +109,8 @@ public class XOutputStream {
             new java.util.concurrent.atomic.AtomicBoolean(false);
     /** A stream is holding this much unsent output or more: pointer motion is dropped meanwhile. */
     private static final int HIGH_BACKLOG_BYTES = 64 * 1024;
+    /** A stream holding this much unsent output belongs to a client that is gone for good. */
+    private static final int MAX_BACKLOG_BYTES = 32 * 1024 * 1024;
     private static volatile boolean backlogHigh = false;
 
     /** Set once the client's socket is closed (or about to be): nothing may be written after that. */
@@ -188,7 +190,7 @@ public class XOutputStream {
                                 stream.flushNow();
                                 if (stream.buffer.position() >= HIGH_BACKLOG_BYTES) high = true;
                             }
-                            catch (IOException | RuntimeException e) {
+                            catch (IOException | RuntimeException | LinkageError e) {
                                 // The client is gone; the reader side tears its connection down.
                                 deferredStreams.remove(stream);
                             }
@@ -250,6 +252,14 @@ public class XOutputStream {
         // behind it, so the byte order the client sees never changes.
         buffer.position(written);
         buffer.compact();
+        if (buffer.position() >= MAX_BACKLOG_BYTES) {
+            // The client has not read for so long that holding more would exhaust memory. Give up on
+            // it: the IOException makes the connection handler drop this client.
+            closed = true;
+            deferredStreams.remove(this);
+            buffer.clear();
+            throw new IOException("Client stopped reading; dropped after " + MAX_BACKLOG_BYTES + " bytes of backlog.");
+        }
         if (buffer.position() >= HIGH_BACKLOG_BYTES) backlogHigh = true;
         deferredStreams.add(this);
         ensureFlusher();

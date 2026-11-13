@@ -80,3 +80,12 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 
 - 2.7.0.2 made `gethostname()` return the fixed computer name, but nothing could look that name up, so a program asking for its own address got an error instead of the device address. The shim now answers lookups of the fixed name (`getaddrinfo`, `gethostbyname`, `gethostbyname_r`) with the device's address, as before the change.
 - The shim was run on Linux with a test program; not tested on a device.
+
+## 2.7.0.5: the crash at game start, found by independent QA
+
+- Cause: `libwinlator.so` and `libgamenative_dns_v4mapped.so` are shipped as prebuilt files and Gradle never compiles the C sources. The non-blocking write added in 2.7.0.1 therefore had no native code in the APK, and the first X server reply after the game started threw `UnsatisfiedLinkError`, which closed the whole app. Every build from 2.7.0.1 to 2.7.0.4 had this.
+- For the same reason the `gethostname()` changes of 2.7.0.2 and 2.7.0.4 never reached the APK: only the registry and volume serial half of the login fix was active in those builds.
+- Fix: the non-blocking send lives in a new small library, `libxnonblock.so` (`cpp/fork/xnonblock.c`), and the CI workflow now compiles it and the DNS shim with the NDK and checks their symbols and their presence in the APK. If `libxnonblock.so` is ever missing, the app falls back to the original blocking write instead of crashing.
+- A client that stops reading for good is dropped after 32 MB of held-back output instead of growing without limit.
+- The change to `xconnector_epoll.c` was reverted, since that file is not compiled.
+- Compiled on CI; not yet run on a device.
