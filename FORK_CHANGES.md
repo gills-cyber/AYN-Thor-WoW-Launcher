@@ -75,3 +75,8 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 - If the launcher is opened on a secondary screen (the Thor's bottom screen), it reopens itself on the primary (top) screen. This is skipped while a game is running.
 - The game uses fixed landscape instead of sensor landscape, so the tilt sensor can no longer flip the picture upside down.
 - Untested on a device. Assumes the Thor reports its top screen as Android's primary display.
+
+## 2.7.0.4: crash between login and the character screen
+
+- 2.7.0.2 made `gethostname()` return the fixed computer name, but nothing could look that name up, so a program asking for its own address got an error instead of the device address. The shim now answers lookups of the fixed name (`getaddrinfo`, `gethostbyname`, `gethostbyname_r`) with the device's address, as before the change.
+- The shim was run on Linux with a test program; not tested on a device.
