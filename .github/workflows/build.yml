@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -74,3 +76,19 @@ jobs:
           path: app/build/outputs/apk/modern/debug/*.apk
           # Private-repo artifacts count against the account's Actions storage; keep them one day.
           retention-days: ${{ github.event.repository.private && 1 || 14 }}
+
+      # Pushing a tag like v2.7.0.5 publishes the APK as a permanent GitHub release, which is also
+      # where the in-app updater looks.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          APK="WoW-Forever-$VERSION.apk"
+          cp app/build/outputs/apk/modern/debug/*.apk "$APK"
+          gh release create "$GITHUB_REF_NAME" "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Version $VERSION" \
+            --notes "Stability fork of the AYN Thor WoW Launcher. See FORK_CHANGES.md for what changed."
