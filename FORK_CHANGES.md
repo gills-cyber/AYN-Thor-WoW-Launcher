@@ -58,3 +58,14 @@ release; they come from reading the source.
 - **Memory log.** Every five minutes of play a line with free device memory, the game's memory use
   and free storage is added to `freeze_logs/memory.log`, and a warning appears when Android reports
   the device low on memory.
+
+## 2.7.0.2: Battle.net login error BLZ51914400
+
+Based on the description in jaredgei/wow-forever-android issue 57 (no code was published there, so this is an independent implementation of the idea).
+
+- Every install shared the one `MachineGuid` baked into the Wine prefix image, and the Windows computer name was the device's IP address, so it changed with every network.
+- New `InstallIdentity` generates once per install, and stores in `files/wow_identity.properties`: a random MachineGuid, a computer name of the form `DESKTOP-XXXXXXX`, a volume serial, a ProductId and an InstallDate.
+- Before every Wine start the values are written to the prefix (`system.reg` and `drive_c/.windows-serial`), so they survive a prefix re-extraction.
+- The `gethostname()` shim returns the stored computer name (env var `GAMENATIVE_HOSTNAME`) instead of the IP address.
+- Not implemented: the optional "type the credentials with human-like timing" idea from the issue.
+- Untested on a device.

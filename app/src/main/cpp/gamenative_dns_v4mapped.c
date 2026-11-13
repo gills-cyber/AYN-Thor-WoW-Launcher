@@ -349,6 +349,24 @@ int gethostname(char *name, size_t len)
     socklen_t probe_len = sizeof(probe);
     char address[INET_ADDRSTRLEN];
     int ret, fd;
+    const char *fixed;
+    size_t fixed_len;
+
+    /*
+     * A stable per-install computer name supplied by the app.  Without it the
+     * Windows computer name followed the device IP and changed per network,
+     * which Battle.net rejects with error BLZ51914400.
+     */
+    fixed = getenv("GAMENATIVE_HOSTNAME");
+    if (fixed && fixed[0] != '\0' && name)
+    {
+        fixed_len = strlen(fixed);
+        if (fixed_len + 1 <= len)
+        {
+            memcpy(name, fixed, fixed_len + 1);
+            return 0;
+        }
+    }
 
     pthread_once(&resolver_once, resolve_next_symbols);
     if (!next_gethostname)

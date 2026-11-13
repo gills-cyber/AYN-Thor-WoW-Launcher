@@ -109,6 +109,7 @@ import app.gamenative.ui.data.XServerState
 import app.gamenative.ui.widget.PerformanceHudView
 import app.gamenative.utils.AssetUtils
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.InstallIdentity
 import app.gamenative.utils.downloader.CoreDriverDownloader
 import app.gamenative.utils.LsfgQuickMenuHelper
 import app.gamenative.utils.LsfgVkManager
@@ -3589,6 +3590,8 @@ private fun setupXEnvironment(
     envVars.put("MESA_DEBUG", "silent")
     envVars.put("MESA_NO_ERROR", "1")
     envVars.put("WINEPREFIX", imageFs.wineprefix)
+    // Stable per-install computer name for the gethostname() shim (login error BLZ51914400).
+    envVars.put(InstallIdentity.HOSTNAME_ENV, InstallIdentity.get(context).computerName)
     if (container.isSdlControllerAPI){
         if (container.inputType == PreferredInputApi.XINPUT.ordinal || container.inputType == PreferredInputApi.AUTO.ordinal){
             envVars.put("SDL_XINPUT_ENABLED", "1")
@@ -3824,6 +3827,9 @@ private fun setupXEnvironment(
         Timber.i("Guest Executable: ${guestProgramLauncherComponent.guestExecutable}") // Log the command
         Timber.i("---------------------------")
     }
+
+    // Per-install MachineGuid, ProductId, InstallDate and volume serial, written while Wine is not running.
+    InstallIdentity.applyToPrefix(context, File(imageFs.wineprefix))
 
     try {
         environment.startEnvironmentComponents()
