@@ -76,6 +76,7 @@ import app.gamenative.ui.util.LocalSnackbarHostController
 import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.utils.Net
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ExitBehavior
 import com.winlator.container.Container
 import com.winlator.container.ContainerData
 import com.winlator.container.ContainerManager
@@ -374,12 +375,26 @@ fun PluviaMain(
                                     ?.destination
                                     ?.route
 
+                                val closeApp = ExitBehavior.consumeCloseRequest()
                                 if (currentRoute == PluviaScreen.XServer.route) {
                                     navController.popBackStack()
+                                }
+                                val activity = context as? Activity
+                                if (closeApp) {
+                                    // "Close app when game exits": close instead of restarting, so the
+                                    // device returns to whatever started the launcher. The process is
+                                    // ended too, for the same reason as the restart below.
+                                    Timber.i("Closing the app because the game exited")
+                                    withContext(Dispatchers.IO) {
+                                        BattleNetSignIn.removeLoginFile(File(GamePath.load(context)))
+                                    }
+                                    activity?.finishAndRemoveTask()
+                                    delay(300)
+                                    Runtime.getRuntime().exit(0)
+                                } else if (currentRoute == PluviaScreen.XServer.route) {
                                     // The guest, renderer and driver state from a finished game session
                                     // can't be reused: the next launch hangs at "Launching game...".
                                     // Restart the app process so every launch starts clean.
-                                    val activity = context as? Activity
                                     if (activity != null && !activity.isFinishing && !activity.isDestroyed) {
                                         delay(300)
                                         AppUtils.restartApplication(activity)

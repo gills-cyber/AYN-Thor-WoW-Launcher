@@ -109,6 +109,7 @@ import app.gamenative.ui.data.XServerState
 import app.gamenative.ui.widget.PerformanceHudView
 import app.gamenative.utils.AssetUtils
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ExitBehavior
 import app.gamenative.utils.InstallIdentity
 import app.gamenative.utils.downloader.CoreDriverDownloader
 import app.gamenative.utils.LsfgQuickMenuHelper
@@ -952,6 +953,7 @@ fun XServerScreen(
                                     onExit,
                                     navigateBack,
                                     "processes_exited",
+                                    ExitBehavior.shouldCloseApp(context),
                                 )
                             }
                             break
@@ -1605,7 +1607,9 @@ fun XServerScreen(
     }
     val onGuestProgramTerminated: (AndroidEvent.GuestProgramTerminated) -> Unit = {
         Timber.i("onGuestProgramTerminated")
-        exit(xServerView!!.getxServer().winHandler, frameRating, container, appId, onExit, navigateBack, "guest_terminated")
+        // The game ended by itself (Exit Game): close the whole app too when that option is on.
+        val closeApp = ExitBehavior.shouldCloseApp(context)
+        exit(xServerView!!.getxServer().winHandler, frameRating, container, appId, onExit, navigateBack, "guest_terminated", closeApp)
     }
     val onForceCloseApp: (AndroidEvent.ForceCloseApp) -> Unit = {
         Timber.i("onForceCloseApp")
@@ -2060,6 +2064,7 @@ fun XServerScreen(
                             val isGameWindow = (targetExecutable.isNotBlank() && windowMatchesExecutable(window, targetExecutable)) ||
                                     (window.isApplicationWindow() && !window.name.equals("shell", ignoreCase = true) && !window.className.contains("explorer", ignoreCase = true))
                             if (isGameWindow) {
+                                ExitBehavior.onGameWindowShown()
                                 onWindowMapped?.invoke(context, window)
                             }
                         }
@@ -3792,6 +3797,7 @@ private fun setupXEnvironment(
     guestProgramLauncherComponent.envVars = EnvVars().apply { putAll(envVars) }
 
     val gameTerminationCallback = Callback<Int> { status ->
+        ExitBehavior.onGameTerminated(status)
         if (status != 0) {
             Timber.e("Guest program terminated with status: $status")
             onGameLaunchError?.invoke("Game terminated with error status: $status")
@@ -3832,6 +3838,7 @@ private fun setupXEnvironment(
     InstallIdentity.applyToPrefix(context, File(imageFs.wineprefix))
 
     try {
+        ExitBehavior.onGameStarted()
         environment.startEnvironmentComponents()
     } catch (e: Exception) {
         Timber.e(e, "Failed to start environment components, cleaning up")
@@ -3923,6 +3930,7 @@ private fun exit(
     onExit: (onComplete: (() -> Unit)?) -> Unit,
     navigateBack: () -> Unit,
     reason: String,
+    closeApp: Boolean = false,
 ) {
     Timber.i("Exit called: $reason")
 
@@ -3930,6 +3938,8 @@ private fun exit(
         Timber.i("Exit already in progress, ignoring duplicate request")
         return
     }
+    // navigateBack (PluviaMain) closes the app instead of restarting it when this is set.
+    if (closeApp) ExitBehavior.requestClose()
 
     // Store session data in container metadata
     frameRating?.let { rating ->

@@ -60,6 +60,7 @@ import app.gamenative.ui.theme.WowGold
 import app.gamenative.ui.theme.WowMuted
 import app.gamenative.ui.theme.WowSubtle
 import app.gamenative.utils.AppUpdater
+import app.gamenative.utils.ExitBehavior
 import app.gamenative.utils.HealthMonitor
 import app.gamenative.utils.StorageUtils
 import app.gamenative.utils.renderReleaseNotes
@@ -103,6 +104,7 @@ fun WoWForeverScreen(
     var region by remember { mutableStateOf(WowFlavor.region) }
     var forceGamepadUi by remember { mutableStateOf(ButtonPad.forceGamepadUi(context, flavor)) }
     var fpsCap by remember { mutableStateOf(FpsCap.get(context, flavor)) }
+    var closeOnExit by remember { mutableStateOf(ExitBehavior.isEnabled(context)) }
     val freeStorageBytes = remember { HealthMonitor.freeBytes(context.filesDir) }
     var gamePath by remember { mutableStateOf(GamePath.load(context)) }
     var files by remember { mutableStateOf(GamePath.Status()) }
@@ -445,6 +447,11 @@ fun WoWForeverScreen(
                     onFpsCap = {
                         fpsCap = it
                         FpsCap.set(context, flavor, it)
+                    },
+                    closeOnExit = closeOnExit,
+                    onCloseOnExit = {
+                        closeOnExit = it
+                        ExitBehavior.setEnabled(context, it)
                     },
                 )
                 if (freeStorageBytes >= 0) {
@@ -1026,6 +1033,8 @@ private fun LaunchSwitches(
     onR3Toggle: (Boolean) -> Unit,
     fpsCap: Int,
     onFpsCap: (Int) -> Unit,
+    closeOnExit: Boolean,
+    onCloseOnExit: (Boolean) -> Unit,
 ) {
     @Composable
     fun Item(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -1043,6 +1052,7 @@ private fun LaunchSwitches(
         Item("Action button pad", buttonPad, onButtonPad)
         Item("Force gamepad UI", forceGamepadUi, onForceGamepadUi)
         Item("R3 toggles mouse / camera", r3Toggle, onR3Toggle)
+        Item("Close app when game exits", closeOnExit, onCloseOnExit)
         // Tap to step through the choices. "Game's own" leaves WoW's frame rate settings alone.
         Row(
             verticalAlignment = Alignment.CenterVertically,
