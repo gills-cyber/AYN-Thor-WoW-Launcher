@@ -27,9 +27,10 @@ object SystemMenuHelper {
     const val ADDON = "ThorSystemButton"
 
     /** The key combination the addon listens for. WoW spells it [WOW_BINDING]. */
-    val COMBO_KEY = XKeycode.KEY_F10
-    val COMBO_MODS = listOf(XKeycode.KEY_CTRL_L, XKeycode.KEY_ALT_L, XKeycode.KEY_SHIFT_L)
-    private const val WOW_BINDING = "ALT-CTRL-SHIFT-F10"
+    // Not Ctrl+Alt (Windows programs can read that as AltGr) and not F10 (a Windows system key).
+    val COMBO_KEY = XKeycode.KEY_F7
+    val COMBO_MODS = listOf(XKeycode.KEY_CTRL_L, XKeycode.KEY_SHIFT_L)
+    private const val WOW_BINDING = "CTRL-SHIFT-F7"
 
     const val FALLBACK_WINDOW_MS = 600L
 
@@ -133,7 +134,7 @@ object SystemMenuHelper {
         |end
         |
         |local saidKey, saidFallback, saidCombat = false, false, false
-        |local shownBefore = false
+        |local shownBefore, sawDown = false, false
         |
         |-- The game menu opened or closed by the addon itself.
         |local function toggleDirectly()
@@ -156,13 +157,19 @@ object SystemMenuHelper {
         |    end
         |end
         |
+        |-- The state before the press: taken on key down when the game reports it, since the game may act on either half.
         |button:HookScript("PreClick", function(self, mouseButton, down)
-        |    if down then return end
-        |    shownBefore = menuShown()
+        |    if down then
+        |        sawDown = true
+        |        shownBefore = menuShown()
+        |    elseif not sawDown then
+        |        shownBefore = menuShown()
+        |    end
         |end)
         |
         |button:HookScript("PostClick", function(self, mouseButton, down)
         |    if down then return end
+        |    sawDown = false
         |    if not saidKey then
         |        saidKey = true
         |        say("System press received.")

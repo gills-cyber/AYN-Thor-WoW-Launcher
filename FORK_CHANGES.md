@@ -117,6 +117,7 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 
 - On a Thor the helper of 2.7.0.7 did not open the menu. The cause is not known yet. The current game client refuses scripted clicks on some of its own buttons, which would explain it, but this could not be confirmed.
 - The addon now checks whether the press changed anything, and if not opens or closes the game menu itself. Addons may only do that outside combat; in combat a quick double tap on System still sends Escape.
+- The key combination changed from Ctrl+Alt+Shift+F10 to Ctrl+Shift+F7: Windows programs can read Ctrl+Alt as AltGr, and F10 is a Windows system key, so the old one may never have reached the game as intended.
 - The addon's version line now lists the patch levels around the installed game version, in case the game was refusing the addon as out of date.
 - The addon writes short lines to chat ("ready", "System press received", "opening the menu directly"), so it is possible to see how far a press gets.
 - The Lua was run against stand-in functions on a PC; not tried in the game.
