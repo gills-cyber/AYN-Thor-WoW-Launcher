@@ -57,8 +57,8 @@ android {
         manifestPlaceholders["screenOrientation"] = "unspecified"
         buildConfigField("boolean", "XR_BUILD", "false")
 
-        versionCode = 288
-        versionName = "2.7.0.7"
+        versionCode = 289
+        versionName = "2.7.1.0"
 
         buildConfigField("boolean", "GOLD", "false")
         val iconValue = "@mipmap/ic_launcher"
@@ -129,6 +129,18 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.getByName(if (keystoreProperties != null) "release" else "debug")
+        }
+        // What the fork publishes: the same code as the debug build (no shrinking or renaming, so
+        // nothing reached by name from native code can go missing), but not debuggable, which lets
+        // Android compile and optimize it fully. Signed with the fixed CI key like the debug build,
+        // so it installs over earlier fork builds.
+        create("optimized") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 

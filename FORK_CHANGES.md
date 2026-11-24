@@ -105,3 +105,10 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
   - Manual: "Back Up Settings" and "Restore Settings" under the Play button. Restore asks which backup, backs up the current state first (and changes nothing if that fails), and restarts the launcher. The game folder location is not changed by a restore.
 - System button helper (launcher switch, on by default). WoW has a client bug where Escape stops opening the game menu after some hours, which also kills the pad's System button. The launcher now installs a tiny addon, `ThorSystemButton`, into the game's `Interface/AddOns`. It binds Ctrl+Alt+Shift+F10 to a secure click on the game's own menu icon, and the System button sends that combination. Tapping System twice quickly sends plain Escape as before, in case the addon is not loaded; that is also how to send Escape on the login and character screens, where addons do not run. Turning the switch off removes the addon. A System button that was remapped in the pad settings is left alone.
 - Compiled on CI; not yet run on a device. The addon in particular could not be tried in the game.
+
+## 2.7.1.0: optimized build
+
+- The published APK is now a non-debuggable build ("optimized" build type). Until now the fork shipped debug builds, which Android runs with fewer optimizations. The code is the same as the debug build: no shrinking or renaming, so nothing reached by name from native code can go missing.
+- Signed with the same key as before, so it installs over earlier fork builds. CI checks the signature, the native libraries and the non-debuggable flag.
+- With a non-debug build the app logs less to logcat. The freeze and crash logs written to files are unaffected.
+- Compiled on CI; not yet run on a device.
