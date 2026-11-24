@@ -97,3 +97,11 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 - The app stays open (restarts to the launcher as before) when the game never showed a window, or ended with an error status before its window had been up for a minute, since that is a failed launch.
 - Quitting through the launcher's own in-game menu is unchanged.
 - An independent review caught that the first version of this change lost a race against the restart and would not have closed the app; this is the corrected design. Not yet run on a device.
+
+## 2.7.0.7: settings backup and a System button that survives the Escape bug
+
+- Settings backup. The launcher keeps zip backups in `LauncherBackups` inside the game folder (shared storage, so they survive uninstalling the app). A backup holds the launcher's switches and frame cap, the button pad layout and remaps, and the game's `WTF` folder (key bindings, interface and addon settings, macros). The saved login is never included.
+  - Automatic: once a day, when the game is launched. The newest 7 are kept.
+  - Manual: "Back Up Settings" and "Restore Settings" under the Play button. Restore asks which backup, backs up the current state first, and restarts the launcher. The game folder location is not changed by a restore.
+- System button helper (launcher switch, on by default). WoW has a client bug where Escape stops opening the game menu after some hours, which also kills the pad's System button. The launcher now installs a tiny addon, `ThorSystemButton`, into the game's `Interface/AddOns`. It binds Ctrl+Alt+Shift+F10 to a secure click on the game's own menu icon, and the System button sends that combination. Tapping System twice quickly sends plain Escape as before, in case the addon is not loaded. Turning the switch off removes the addon. A System button that was remapped in the pad settings is left alone.
+- Compiled on CI; not yet run on a device. The addon in particular could not be tried in the game.

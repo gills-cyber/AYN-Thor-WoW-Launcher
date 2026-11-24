@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -61,6 +63,9 @@ import app.gamenative.ui.theme.WowMuted
 import app.gamenative.ui.theme.WowSubtle
 import app.gamenative.utils.AppUpdater
 import app.gamenative.utils.ExitBehavior
+import com.winlator.core.AppUtils
+import app.gamenative.utils.SettingsBackup
+import app.gamenative.utils.SystemMenuHelper
 import app.gamenative.utils.HealthMonitor
 import app.gamenative.utils.StorageUtils
 import app.gamenative.utils.renderReleaseNotes
@@ -105,6 +110,11 @@ fun WoWForeverScreen(
     var forceGamepadUi by remember { mutableStateOf(ButtonPad.forceGamepadUi(context, flavor)) }
     var fpsCap by remember { mutableStateOf(FpsCap.get(context, flavor)) }
     var closeOnExit by remember { mutableStateOf(ExitBehavior.isEnabled(context)) }
+    var systemHelper by remember { mutableStateOf(SystemMenuHelper.isEnabled(context)) }
+    var backupBusy by remember { mutableStateOf(false) }
+    var backupNote by remember { mutableStateOf<String?>(null) }
+    var restoreChoices by remember { mutableStateOf<List<File>?>(null) }
+    var restoreTarget by remember { mutableStateOf<File?>(null) }
     val freeStorageBytes = remember { HealthMonitor.freeBytes(context.filesDir) }
     var gamePath by remember { mutableStateOf(GamePath.load(context)) }
     var files by remember { mutableStateOf(GamePath.Status()) }
@@ -453,6 +463,11 @@ fun WoWForeverScreen(
                         closeOnExit = it
                         ExitBehavior.setEnabled(context, it)
                     },
+                    systemHelper = systemHelper,
+                    onSystemHelper = {
+                        systemHelper = it
+                        SystemMenuHelper.setEnabled(context, it)
+                    },
                 )
                 if (freeStorageBytes >= 0) {
                     val freeGb = freeStorageBytes / (1024.0 * 1024.0 * 1024.0)
@@ -707,6 +722,48 @@ fun WoWForeverScreen(
                         }
                     }
                 }
+                if (!filesMissing) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LinkButton("Back Up Settings", Icons.Default.Save, enabled = !busy && !backupBusy) {
+                            if (!files.hasStorageAccess) {
+                                showStoragePermissionDialog = true
+                                return@LinkButton
+                            }
+                            backupBusy = true
+                            backupNote = "Backing up settings..."
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { SettingsBackup.create(context, File(gamePath), FLAVOR_DIR) }
+                                }
+                                backupNote = result.fold(
+                                    { "Settings backed up to ${SettingsBackup.DIR_NAME} in the game folder (${SettingsBackup.label(it.file)})." },
+                                    { "Backup failed: ${it.message}" },
+                                )
+                                backupBusy = false
+                            }
+                        }
+                        LinkButton("Restore Settings", Icons.Default.Restore, enabled = !busy && !backupBusy) {
+                            if (!files.hasStorageAccess) {
+                                showStoragePermissionDialog = true
+                                return@LinkButton
+                            }
+                            scope.launch {
+                                val found = withContext(Dispatchers.IO) { SettingsBackup.list(File(gamePath)) }
+                                if (found.isEmpty()) {
+                                    backupNote = "No backups found in ${SettingsBackup.DIR_NAME} in the game folder yet."
+                                } else {
+                                    restoreChoices = found
+                                }
+                            }
+                        }
+                    }
+                    backupNote?.let { note ->
+                        Text(text = note, fontSize = 11.sp, color = WowSubtle)
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -769,6 +826,90 @@ fun WoWForeverScreen(
                 hasSavedLogin = true
                 autoLogin = true
             },
+        )
+    }
+
+    restoreChoices?.let { choices ->
+        AlertDialog(
+            onDismissRequest = { restoreChoices = null },
+            title = { Text(text = "Restore Settings", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = WowGold) },
+            text = {
+                Column {
+                    Text(text = "Pick a backup to restore.", fontSize = 13.sp, color = WowCream)
+                    choices.forEach { file ->
+                        Text(
+                            text = SettingsBackup.label(file),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = WowFrame,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    restoreChoices = null
+                                    restoreTarget = file
+                                }
+                                .padding(vertical = 10.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { restoreChoices = null }) {
+                    Text("CANCEL", color = WowMuted)
+                }
+            },
+            containerColor = WowStoneTop,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.border(3.dp, WowFrame, RoundedCornerShape(10.dp)),
+        )
+    }
+
+    restoreTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (!backupBusy) restoreTarget = null },
+            title = { Text(text = "Restore This Backup?", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = WowGold) },
+            text = {
+                Text(
+                    text = "The launcher switches, the button pad layout and the game's settings folder (key bindings, interface and addon settings, macros) go back to how they were on ${SettingsBackup.label(target)}.\n\nThe current settings are backed up first, and the launcher restarts when it is done. Your saved login is not affected.",
+                    fontSize = 13.sp,
+                    color = WowCream,
+                    lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !backupBusy,
+                    onClick = {
+                        backupBusy = true
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching { SettingsBackup.restore(context, File(gamePath), FLAVOR_DIR, target) }
+                            }
+                            if (result.isSuccess) {
+                                // A fresh process, so every screen reads the restored values.
+                                AppUtils.restartApplication(context)
+                            } else {
+                                backupNote = "Restore failed: ${result.exceptionOrNull()?.message}"
+                                backupBusy = false
+                                restoreTarget = null
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = WowBronze, contentColor = Color.White),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(if (backupBusy) "RESTORING..." else "RESTORE", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(enabled = !backupBusy, onClick = { restoreTarget = null }) {
+                    Text("CANCEL", color = WowMuted)
+                }
+            },
+            containerColor = WowStoneTop,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.border(3.dp, WowFrame, RoundedCornerShape(10.dp)),
         )
     }
 
@@ -1035,6 +1176,8 @@ private fun LaunchSwitches(
     onFpsCap: (Int) -> Unit,
     closeOnExit: Boolean,
     onCloseOnExit: (Boolean) -> Unit,
+    systemHelper: Boolean,
+    onSystemHelper: (Boolean) -> Unit,
 ) {
     @Composable
     fun Item(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -1053,6 +1196,7 @@ private fun LaunchSwitches(
         Item("Force gamepad UI", forceGamepadUi, onForceGamepadUi)
         Item("R3 toggles mouse / camera", r3Toggle, onR3Toggle)
         Item("Close app when game exits", closeOnExit, onCloseOnExit)
+        Item("System button helper", systemHelper, onSystemHelper)
         // Tap to step through the choices. "Game's own" leaves WoW's frame rate settings alone.
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1351,6 +1495,8 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onS
         PadSettings.init(context)
         PadSettings.launchProfile(WowFlavor.current.name).takeIf { it > 0 }?.let { PadSettings.loadProfile(it) }
         PadSettings.set(PadSettings.R3_TOGGLE, ButtonPad.r3Toggle(context, WowFlavor.current))
+        onStatus("Checking settings backup...")
+        SettingsBackup.autoBackupIfDue(context, gameRoot, FLAVOR_DIR)
         ensureGameConfig(gameRoot, if (ButtonPad.forceGamepadUi(context, WowFlavor.current)) 0 else 1)
         applyFpsCap(context, gameRoot)
     } catch (e: Exception) {
@@ -1376,6 +1522,13 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, onS
     }
     val arm64Exe = flavor.exeFile(gameRoot)
     check(arm64Exe.exists()) { "No ARM64 client in ${arm64Exe.parent} after download." }
+
+    // After the client download, so a first install already has its folder and version.
+    SystemMenuHelper.prepare(
+        context,
+        File(gameRoot, FLAVOR_DIR),
+        WowClientDownloader.readBuildInfo(File(gameRoot, BUILD_INFO))?.get("Version"),
+    )
 
     onStatus("Configuring ${gpu.label} container...")
     val containerManager = ContainerManager(context)

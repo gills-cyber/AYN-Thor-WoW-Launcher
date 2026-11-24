@@ -2,12 +2,14 @@ package app.gamenative.externaldisplay
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import app.gamenative.utils.SystemMenuHelper
 import com.winlator.xserver.XKeycode
 import com.winlator.xserver.XServer
 
@@ -289,7 +291,7 @@ class ExternalActionBarView(
                         PadSettings.haptic(view)
                         // A release that never arrived must not leave the old key down.
                         pressedKey?.let { releaseKey(it) }
-                        val combo = comboFor(slot)
+                        val combo = systemMenuCombo(slot) ?: comboFor(slot)
                         pressedKey = combo.key
                         pressKey(combo, isolated = slot.isolated, mergeModifiers = mergesModifiers(slot))
                     }
@@ -314,6 +316,26 @@ class ExternalActionBarView(
     private fun wrapLabel(name: String): String {
         val cut = name.lastIndexOf(' ')
         return if (name.length > 8 && cut > 0 && '/' !in name) name.substring(0, cut) + "\n" + name.substring(cut + 1) else name
+    }
+
+    /** When the System button last sent the helper's key combination (uptime), 0 = the last tap sent Escape. */
+    private var systemHelperSentAt = 0L
+
+    /**
+     * With the System button helper on, System sends the key combination the launcher's addon turns into
+     * a click on the game's own menu icon, which keeps working when Escape stops opening the menu.
+     * A second tap shortly after sends the button's normal Escape instead, in case the addon is not loaded.
+     * Null means "send what the button normally sends".
+     */
+    private fun systemMenuCombo(slot: Slot): KeyCombo? {
+        if (slot.label != "System" || !SystemMenuHelper.active || PadSettings.remapped(slot.label) != null) return null
+        val now = SystemClock.uptimeMillis()
+        if (systemHelperSentAt != 0L && now - systemHelperSentAt <= SystemMenuHelper.FALLBACK_WINDOW_MS) {
+            systemHelperSentAt = 0L
+            return null
+        }
+        systemHelperSentAt = now
+        return KeyCombo(SystemMenuHelper.COMBO_KEY, SystemMenuHelper.COMBO_MODS)
     }
 
     /** What a button sends: the user's remap if there is one, otherwise the default. */
