@@ -21,4 +21,12 @@ class SystemMenuHelperTest {
         assertNull(SystemMenuHelper.interfaceVersion("12.x.1.1"))
         assertNull(SystemMenuHelper.interfaceVersion("12.100.1.1"))
     }
+
+    @Test
+    fun interfaceListNamesTheInstalledVersionFirstAndItsNeighbours() {
+        val list = SystemMenuHelper.interfaceList(120001).split(", ")
+        assertEquals("120001", list.first())
+        assertEquals(list.size, list.toSet().size)
+        assertEquals(true, list.containsAll(listOf("120000", "120002", "120100")))
+    }
 }

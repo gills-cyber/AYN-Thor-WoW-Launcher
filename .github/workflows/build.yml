@@ -60,8 +60,17 @@ jobs:
           done
           grep -q GAMENATIVE_HOSTNAME "$OUT/libgamenative_dns_v4mapped.so"
 
+      # Robolectric downloads its Android jars from Maven Central while the tests run. That download
+      # fails now and then and takes many tests down with it, so keep the jars between runs and
+      # give the tests one second go (a real test failure fails both times).
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-android-all-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: robolectric-android-all-
+
       - name: Unit tests
-        run: ./gradlew testModernDebugUnitTest
+        run: ./gradlew testModernDebugUnitTest || ./gradlew testModernDebugUnitTest
 
       - name: Build debug APK
         run: ./gradlew assembleModernDebug

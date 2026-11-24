@@ -27,9 +27,10 @@ object SystemMenuHelper {
     const val ADDON = "ThorSystemButton"
 
     /** The key combination the addon listens for. WoW spells it [WOW_BINDING]. */
-    val COMBO_KEY = XKeycode.KEY_F10
-    val COMBO_MODS = listOf(XKeycode.KEY_CTRL_L, XKeycode.KEY_ALT_L, XKeycode.KEY_SHIFT_L)
-    private const val WOW_BINDING = "ALT-CTRL-SHIFT-F10"
+    // Not Ctrl+Alt (Windows programs can read that as AltGr) and not F10 (a Windows system key).
+    val COMBO_KEY = XKeycode.KEY_F7
+    val COMBO_MODS = listOf(XKeycode.KEY_CTRL_L, XKeycode.KEY_SHIFT_L)
+    private const val WOW_BINDING = "CTRL-SHIFT-F7"
 
     const val FALLBACK_WINDOW_MS = 600L
 
@@ -80,32 +81,108 @@ object SystemMenuHelper {
         file.writeText(text)
     }
 
+    /**
+     * The game refuses an addon whose "## Interface" does not list the running version, so the line
+     * names the installed version and the patch levels around it (a game update can land between
+     * the launcher reading the version and the game starting).
+     */
+    internal fun interfaceList(interfaceVersion: Int): String {
+        val minorBase = interfaceVersion / 100 * 100
+        val versions = linkedSetOf(interfaceVersion)
+        (0..9).forEach { versions += minorBase + it }
+        (0..2).forEach { versions += minorBase + 100 + it }
+        return versions.joinToString(", ")
+    }
+
     private fun toc(interfaceVersion: Int) = """
-        |## Interface: $interfaceVersion
+        |## Interface: ${interfaceList(interfaceVersion)}
         |## Title: Thor System Button
         |## Notes: Lets the launcher's System button open the game menu even when Escape stops doing so. Installed by the WoW launcher.
         |## Author: AYN Thor WoW Launcher
-        |## Version: 1
+        |## Version: 2
         |
         |$ADDON.lua
         |""".trimMargin()
 
-    // Kept deliberately small. Nothing here touches the game menu from addon code: the key is bound
-    // to a secure button whose only action is to click the game's own menu icon.
+    // The key is bound to a secure button whose action is to click the game's own menu icon. Newer
+    // clients can refuse scripted clicks on their own buttons, so when the press changed nothing the
+    // addon opens or closes the menu itself (only outside combat, where addons are allowed to).
+    // The chat lines exist so a player can report how far a press got without typing anything.
     private val LUA = """
         |-- Installed by the WoW launcher. Turn off "System button helper" in the launcher to remove it.
         |local KEY = "$WOW_BINDING"
         |local NAME = "ThorSystemMenuButton"
+        |local TAG = "|cffffd100Thor System Button:|r "
+        |
+        |local function say(text)
+        |    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(TAG .. text) end
+        |end
         |
         |local ok, button = pcall(CreateFrame, "Button", NAME, UIParent, "SecureActionButtonTemplate")
-        |if not ok or not button then return end
+        |if not ok or not button then
+        |    say("could not create its button.")
+        |    return
+        |end
         |
         |-- Act once per key press whatever the "cast on key down" setting is.
         |button:RegisterForClicks("AnyDown", "AnyUp")
         |button:SetAttribute("useOnKeyDown", false)
         |button:SetAttribute("type", "click")
         |
+        |local function menuShown()
+        |    return GameMenuFrame ~= nil and GameMenuFrame:IsShown() and true or false
+        |end
+        |
+        |local saidKey, saidFallback, saidCombat = false, false, false
+        |local shownBefore, sawDown = false, false
+        |
+        |-- The game menu opened or closed by the addon itself.
+        |local function toggleDirectly()
+        |    if not GameMenuFrame then return end
+        |    if InCombatLockdown() then
+        |        if not saidCombat then
+        |            saidCombat = true
+        |            say("the game did not open the menu, and addons may not open it in combat. Tap System twice quickly for Escape.")
+        |        end
+        |        return
+        |    end
+        |    if not saidFallback then
+        |        saidFallback = true
+        |        say("opening the menu directly.")
+        |    end
+        |    if GameMenuFrame:IsShown() then
+        |        if not pcall(HideUIPanel, GameMenuFrame) or GameMenuFrame:IsShown() then pcall(GameMenuFrame.Hide, GameMenuFrame) end
+        |    else
+        |        if not pcall(ShowUIPanel, GameMenuFrame) or not GameMenuFrame:IsShown() then pcall(GameMenuFrame.Show, GameMenuFrame) end
+        |    end
+        |end
+        |
+        |-- The state before the press: taken on key down when the game reports it, since the game may act on either half.
+        |button:HookScript("PreClick", function(self, mouseButton, down)
+        |    if down then
+        |        sawDown = true
+        |        shownBefore = menuShown()
+        |    elseif not sawDown then
+        |        shownBefore = menuShown()
+        |    end
+        |end)
+        |
+        |button:HookScript("PostClick", function(self, mouseButton, down)
+        |    if down then return end
+        |    sawDown = false
+        |    if not saidKey then
+        |        saidKey = true
+        |        say("System press received.")
+        |    end
+        |    local before = shownBefore
+        |    local function check()
+        |        if menuShown() == before then pcall(toggleDirectly) end
+        |    end
+        |    if C_Timer and C_Timer.After then C_Timer.After(0.05, check) else check() end
+        |end)
+        |
         |local events = CreateFrame("Frame")
+        |local saidReady = false
         |
         |local function apply()
         |    -- Secure buttons and bindings cannot be changed in combat: try again when it ends.
@@ -114,17 +191,21 @@ object SystemMenuHelper {
         |        return
         |    end
         |    local target = _G["MainMenuMicroButton"]
-        |    if not target then return end
-        |    button:SetAttribute("clickbutton", target)
+        |    if target then button:SetAttribute("clickbutton", target) end
         |    ClearOverrideBindings(button)
         |    SetOverrideBindingClick(button, true, KEY, NAME, "LeftButton")
+        |    if not saidReady then
+        |        saidReady = true
+        |        say("ready.")
+        |    end
         |end
         |
         |events:RegisterEvent("PLAYER_LOGIN")
         |events:RegisterEvent("PLAYER_ENTERING_WORLD")
         |events:SetScript("OnEvent", function(self, event)
         |    if event == "PLAYER_REGEN_ENABLED" then self:UnregisterEvent(event) end
-        |    pcall(apply)
+        |    local fine, err = pcall(apply)
+        |    if not fine then say("setup failed: " .. tostring(err)) end
         |end)
         |""".trimMargin()
 }
