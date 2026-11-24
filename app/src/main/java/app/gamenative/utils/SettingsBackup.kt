@@ -7,6 +7,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -28,11 +29,15 @@ import timber.log.Timber
 object SettingsBackup {
     const val DIR_NAME = "LauncherBackups"
 
-    /** How many backups are kept; the oldest are deleted. */
-    const val KEEP = 7
+    /** How many automatic (daily) backups are kept; the oldest are deleted. */
+    const val KEEP_AUTO = 7
+
+    /** How many manual backups (and safety copies made before a restore) are kept. They never push out automatic ones, nor the other way round. */
+    const val KEEP_MANUAL = 5
 
     private const val PREFIX = "settings-"
     private const val SUFFIX = ".zip"
+    private const val AUTO_MARK = "-auto"
     private const val PREFS_ENTRY = "prefs.json"
     private const val MANIFEST_ENTRY = "manifest.json"
     private const val GAME_PREFIX = "game/"
@@ -60,28 +65,34 @@ object SettingsBackup {
 
     /** "2026-11-24 18:30" for a backup file, or its file name if it does not follow the pattern. */
     fun label(file: File): String {
-        val stamp = file.name.removePrefix(PREFIX).removeSuffix(SUFFIX)
+        val stamp = file.name.removePrefix(PREFIX).removeSuffix(SUFFIX).removeSuffix(AUTO_MARK)
         return runCatching {
             val date = checkNotNull(SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).parse(stamp))
-            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(date)
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(date) + if (isAuto(file)) " (automatic)" else ""
         }.getOrDefault(file.name)
     }
 
+    private fun isAuto(file: File) = file.name.endsWith("$AUTO_MARK$SUFFIX")
+
     /**
-     * Writes a new backup of the launcher preferences and of [flavorDir]'s `WTF` folder.
+     * Writes a new backup of the launcher preferences and of [flavorDir]'s `WTF` folder. [protect] is a
+     * backup that must survive the clean-up of old ones (the one about to be restored).
      * The zip is written under a temporary name first, so a backup that is cut short never
      * looks like a complete one.
      */
     @Synchronized
-    fun create(context: Context, gameRoot: File, flavorDir: String, prune: Boolean = true): Result {
+    fun create(context: Context, gameRoot: File, flavorDir: String, auto: Boolean = false, protect: File? = null): Result {
         val dir = dir(gameRoot)
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Can't create ${dir.path}")
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val target = File(dir, "$PREFIX$stamp$SUFFIX")
-        val temp = File(dir, "$PREFIX$stamp$SUFFIX.tmp")
+        val name = PREFIX + stamp + (if (auto) AUTO_MARK else "") + SUFFIX
+        val target = File(dir, name)
+        val temp = File(dir, "$name.tmp")
         var gameFiles = 0
         try {
             ZipOutputStream(temp.outputStream().buffered()).use { zip ->
+                // Speed over size: the automatic backup runs while a launch is waiting.
+                zip.setLevel(Deflater.BEST_SPEED)
                 zip.putNextEntry(ZipEntry(MANIFEST_ENTRY))
                 zip.write(
                     JSONObject()
@@ -114,7 +125,7 @@ object SettingsBackup {
         } finally {
             temp.delete()
         }
-        if (prune) prune(gameRoot)
+        prune(gameRoot, setOfNotNull(target, protect))
         return Result(target, gameFiles)
     }
 
@@ -127,23 +138,28 @@ object SettingsBackup {
             if (last in 1..now && now - last < AUTO_INTERVAL_MS) return
             // Nothing worth keeping before the game has run once.
             if (!File(File(gameRoot, flavorDir), WTF).isDirectory) return
-            create(context, gameRoot, flavorDir)
+            // Recorded before the attempt, so a backup that keeps failing is not retried on every launch.
             prefs.edit().putLong(KEY_LAST_AUTO, now).apply()
+            create(context, gameRoot, flavorDir, auto = true)
         }.onFailure { Timber.w(it, "Automatic settings backup failed") }
     }
 
     /**
      * Puts the launcher preferences and the game's `WTF` files from [backup] back. Files of the
-     * game folder that are not in the backup are left alone. The current state is backed up first.
+     * game folder that are not in the backup are left alone. The current state is backed up first,
+     * and nothing is changed if that safety copy cannot be made.
      * The caller must restart the app afterwards so every screen reads the restored values.
      *
      * @return the number of game files written.
      */
     @Synchronized
     fun restore(context: Context, gameRoot: File, flavorDir: String, backup: File): Int {
-        // A safety copy of what is about to be replaced. Not pruned here, so it cannot push out the backup being restored.
-        runCatching { create(context, gameRoot, flavorDir, prune = false) }
-            .onFailure { Timber.w(it, "Could not back up the current settings before restoring") }
+        // A safety copy of what is about to be replaced. Without it there is no way back, so a failure stops the restore.
+        try {
+            create(context, gameRoot, flavorDir, protect = backup)
+        } catch (e: Exception) {
+            throw IOException("Could not back up the current settings first (${e.message}). Nothing was changed.", e)
+        }
 
         val rootPath = gameRoot.canonicalFile
         var written = 0
@@ -175,12 +191,15 @@ object SettingsBackup {
             }
             prefsJson?.let { importPrefs(context, it) }
         }
-        prune(gameRoot)
         return written
     }
 
-    private fun prune(gameRoot: File) {
-        list(gameRoot).drop(KEEP).forEach { it.delete() }
+    /** Deletes the oldest backups of each kind beyond its limit, but never one of [protect]. */
+    private fun prune(gameRoot: File, protect: Set<File>) {
+        val (auto, manual) = list(gameRoot).partition(::isAuto)
+        (auto.drop(KEEP_AUTO) + manual.drop(KEEP_MANUAL))
+            .filterNot { old -> protect.any { it.name == old.name } }
+            .forEach { it.delete() }
         // Leftovers of a backup that was cut short.
         dir(gameRoot).listFiles { f -> f.isFile && f.name.startsWith(PREFIX) && f.name.endsWith(".tmp") }
             ?.filter { System.currentTimeMillis() - it.lastModified() > 60 * 60 * 1000 }

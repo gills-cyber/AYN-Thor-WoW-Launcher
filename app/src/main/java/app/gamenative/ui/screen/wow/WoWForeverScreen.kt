@@ -834,7 +834,7 @@ fun WoWForeverScreen(
             onDismissRequest = { restoreChoices = null },
             title = { Text(text = "Restore Settings", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = WowGold) },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(text = "Pick a backup to restore.", fontSize = 13.sp, color = WowCream)
                     choices.forEach { file ->
                         Text(
@@ -871,7 +871,7 @@ fun WoWForeverScreen(
             title = { Text(text = "Restore This Backup?", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = WowGold) },
             text = {
                 Text(
-                    text = "The launcher switches, the button pad layout and the game's settings folder (key bindings, interface and addon settings, macros) go back to how they were on ${SettingsBackup.label(target)}.\n\nThe current settings are backed up first, and the launcher restarts when it is done. Your saved login is not affected.",
+                    text = "The launcher switches, the button pad layout and the game's settings folder (key bindings, interface and addon settings, macros) go back to how they were on ${SettingsBackup.label(target)}. Settings the game keeps on Blizzard's servers may still be synced over them.\n\nThe current settings are backed up first, and the launcher restarts when it is done. Your saved login is not affected.",
                     fontSize = 13.sp,
                     color = WowCream,
                     lineHeight = 18.sp
