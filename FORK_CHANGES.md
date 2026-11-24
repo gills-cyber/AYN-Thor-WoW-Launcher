@@ -93,5 +93,7 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 ## 2.7.0.6: close the app when the game exits
 
 - New launcher switch "Close app when game exits", on by default. After Exit Game in WoW the launcher closes itself, so the device returns to whatever started it (Cocoon, the home screen) instead of the "Launch WoW" screen.
-- The app stays open when the game ends within its first minute with an error status, since that is a failed launch and the launcher shows the error.
+- How: the original app restarts its own process after every game session (a used session cannot be reused). With the switch on, that restart is replaced by closing the activity and ending the process.
+- The app stays open (restarts to the launcher as before) when the game never showed a window, or ended with an error status before its window had been up for a minute, since that is a failed launch.
 - Quitting through the launcher's own in-game menu is unchanged.
+- An independent review caught that the first version of this change lost a race against the restart and would not have closed the app; this is the corrected design. Not yet run on a device.

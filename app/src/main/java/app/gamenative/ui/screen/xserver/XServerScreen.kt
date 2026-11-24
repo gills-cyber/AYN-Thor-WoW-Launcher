@@ -953,6 +953,7 @@ fun XServerScreen(
                                     onExit,
                                     navigateBack,
                                     "processes_exited",
+                                    ExitBehavior.shouldCloseApp(context),
                                 )
                             }
                             break
@@ -2063,6 +2064,7 @@ fun XServerScreen(
                             val isGameWindow = (targetExecutable.isNotBlank() && windowMatchesExecutable(window, targetExecutable)) ||
                                     (window.isApplicationWindow() && !window.name.equals("shell", ignoreCase = true) && !window.className.contains("explorer", ignoreCase = true))
                             if (isGameWindow) {
+                                ExitBehavior.onGameWindowShown()
                                 onWindowMapped?.invoke(context, window)
                             }
                         }
@@ -3936,6 +3938,8 @@ private fun exit(
         Timber.i("Exit already in progress, ignoring duplicate request")
         return
     }
+    // navigateBack (PluviaMain) closes the app instead of restarting it when this is set.
+    if (closeApp) ExitBehavior.requestClose()
 
     // Store session data in container metadata
     frameRating?.let { rating ->
@@ -3973,14 +3977,6 @@ private fun exit(
     frameRating?.writeSessionSummary()
     onExit(null)
     navigateBack()
-    if (closeApp) {
-        // A moment later and on the main thread, so the clean-up above (and the removal of the
-        // login file) is under way before the activity goes.
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            Timber.i("Closing the app because the game exited")
-            PluviaApp.events.emit(AndroidEvent.EndProcess)
-        }, 500L)
-    }
 }
 
 private suspend fun setupWineSystemFiles(
