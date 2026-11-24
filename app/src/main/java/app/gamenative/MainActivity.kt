@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val onEndProcess: (AndroidEvent.EndProcess) -> Unit = {
-        finishAndRemoveTask()
+        runOnUiThread { finishAndRemoveTask() }
     }
 
     private var controllerInputManager: InputManager? = null

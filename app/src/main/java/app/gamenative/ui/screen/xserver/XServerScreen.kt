@@ -109,6 +109,7 @@ import app.gamenative.ui.data.XServerState
 import app.gamenative.ui.widget.PerformanceHudView
 import app.gamenative.utils.AssetUtils
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ExitBehavior
 import app.gamenative.utils.InstallIdentity
 import app.gamenative.utils.downloader.CoreDriverDownloader
 import app.gamenative.utils.LsfgQuickMenuHelper
@@ -1605,7 +1606,9 @@ fun XServerScreen(
     }
     val onGuestProgramTerminated: (AndroidEvent.GuestProgramTerminated) -> Unit = {
         Timber.i("onGuestProgramTerminated")
-        exit(xServerView!!.getxServer().winHandler, frameRating, container, appId, onExit, navigateBack, "guest_terminated")
+        // The game ended by itself (Exit Game): close the whole app too when that option is on.
+        val closeApp = ExitBehavior.shouldCloseApp(context)
+        exit(xServerView!!.getxServer().winHandler, frameRating, container, appId, onExit, navigateBack, "guest_terminated", closeApp)
     }
     val onForceCloseApp: (AndroidEvent.ForceCloseApp) -> Unit = {
         Timber.i("onForceCloseApp")
@@ -3792,6 +3795,7 @@ private fun setupXEnvironment(
     guestProgramLauncherComponent.envVars = EnvVars().apply { putAll(envVars) }
 
     val gameTerminationCallback = Callback<Int> { status ->
+        ExitBehavior.onGameTerminated(status)
         if (status != 0) {
             Timber.e("Guest program terminated with status: $status")
             onGameLaunchError?.invoke("Game terminated with error status: $status")
@@ -3832,6 +3836,7 @@ private fun setupXEnvironment(
     InstallIdentity.applyToPrefix(context, File(imageFs.wineprefix))
 
     try {
+        ExitBehavior.onGameStarted()
         environment.startEnvironmentComponents()
     } catch (e: Exception) {
         Timber.e(e, "Failed to start environment components, cleaning up")
@@ -3923,6 +3928,7 @@ private fun exit(
     onExit: (onComplete: (() -> Unit)?) -> Unit,
     navigateBack: () -> Unit,
     reason: String,
+    closeApp: Boolean = false,
 ) {
     Timber.i("Exit called: $reason")
 
@@ -3967,6 +3973,14 @@ private fun exit(
     frameRating?.writeSessionSummary()
     onExit(null)
     navigateBack()
+    if (closeApp) {
+        // A moment later and on the main thread, so the clean-up above (and the removal of the
+        // login file) is under way before the activity goes.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            Timber.i("Closing the app because the game exited")
+            PluviaApp.events.emit(AndroidEvent.EndProcess)
+        }, 500L)
+    }
 }
 
 private suspend fun setupWineSystemFiles(

@@ -89,3 +89,9 @@ Based on the description in jaredgei/wow-forever-android issue 57 (no code was p
 - A client that stops reading for good is dropped after 32 MB of held-back output instead of growing without limit.
 - The change to `xconnector_epoll.c` was reverted, since that file is not compiled.
 - Compiled on CI; not yet run on a device.
+
+## 2.7.0.6: close the app when the game exits
+
+- New launcher switch "Close app when game exits", on by default. After Exit Game in WoW the launcher closes itself, so the device returns to whatever started it (Cocoon, the home screen) instead of the "Launch WoW" screen.
+- The app stays open when the game ends within its first minute with an error status, since that is a failed launch and the launcher shows the error.
+- Quitting through the launcher's own in-game menu is unchanged.
